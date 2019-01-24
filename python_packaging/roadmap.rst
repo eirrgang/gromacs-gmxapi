@@ -96,39 +96,93 @@ Sequence
 
 Features development sequence based on functional priorities and dependencies.
 
+.. extracted with
+python -c \
+"import json;
+print('\n'.join(
+    [str('* ' + '  '.join([line for line in cell['source']]))
+        for cell in json.load(open('RequiredFunctionality.ipynb', 'r'))['cells']
+        if cell['cell_type'] == 'markdown']
+    )
+)" | \
+sed 's/<!-- /\*\(/' | \
+sed 's/ -->/\)\*/'
+
 * gmx.make_operation wraps importable Python code.
+  *(24 January)*
 * gmx.make_operation produces output proxy that establishes execution dependency
+  *(1 February)*
 * gmx.make_operation produces output proxy that can be used as input
+  *(5 February)*
 * gmx.make_operation uses dimensionality and typing of named data to generate correct work topologies
+  *(8 February)*
 * gmx.gather allows explicit many-to-one or many-to-many data flow
+  *(15 February)*
 * gmx.reduce helper simplifies expression of operations dependent on gather
+  *(15 February)*
 * gmx.commandline_operation provides utility for wrapping command line tools
-* gmx.commandline_operation produces operations that can be executed in a dependency graph
+  *(15 February)*
+* gmx.commandline_operation produces operations that can be executed in a dependency graph.
+  *(15 February)*
 * gmx.mdrun uses bindings to C++ API to launch simulations
+  *(22 February)*
 * gmx.mdrun understands ensemble work
+  *(22 February)*
 * *gmx.mdrun supports interface for binding MD plugins*
+  (requires interaction with library development)
+  *(1 March)*
 * gmx.subgraph fuses operations
+  *(1 March)*
 * gmx.while creates an operation wrapping a dynamic number of iterations of a subgraph
+  *(1 March)*
 * gmx.logical_* operations allow optimizable manipulation of boolean values
+  *(8 March)*
 * gmx.read_tpr utility provides access to TPR file contents
+  *(22 February)*
 * gmx.read_tpr operation produces output consumable by gmx.mdrun
+  *(22 February)*
 * gmx.mdrun produces gromacs.read_tpr node for tpr filename kwargs
+  *(22 February)*
 * gmx.mdrun is properly restartable
-* *gmx.read_tpr handles state from checkpoints*
+  *(22 February)*
 * gmx.run finds and runs operations to produce expected output files
+  *(8 March)*
 * gmx.run handles ensemble work topologies
+  *(8 March)*
 * gmx.run handles multi-process execution
+  *(8 March)*
 * gmx.run safety checks to avoid data loss / corruption
+  *(8 March)*
 * *gmx.run conveys run-time parameters to execution context*
-* gmx.write_tpr merges tpr data (e.g. inputrec, structure, topology) into new file(s)
+  (requires interaction with library development)
+  *(15 March)*
 * *gmx.modify_input produces new (tpr) simulation input in data flow operation*
+  (requires interaction with library development)
+  *(1 March)*
+* gmx.make_input dispatches appropriate preprocessing for file or in-memory simulation input.
+  *(15 March)*
+* *gmx.make_input handles state from checkpoints*
+  (requires interaction with library development)
+  *(22 March)*
+* gmx.write_tpr (a facility used to implement higher-level functionality) merges tpr data (e.g. inputrec, structure, topology) into new file(s)
+  *(1 March)*
 * gmx.tool provides wrapping of unmigrated gmx CLI tools
+  *(1 March)*
 * gmx.tool uses Python bindings on C++ API for CLI modules
+  *(15 March)*
 * *gmx.tool operations are migrated to updated Options infrastructure*
+  (requires interaction with library development)
+  *(5 April)*
 * gmx.context manages data placement according to where operations run
-* gmx.context negotiates allocation of 1 node per operation with shared comm
+  *(8 March)*
+* *gmx.context negotiates allocation of 1 node per operation with shared comm*
+  (requires interaction with library development)
+  *(8 March)*
 * gmx.context negotiates an integer number of nodes per operation
-* gmx.context negotiates allocation of resources for scheduled work
+  *(22 March)*
+* *gmx.context negotiates allocation of resources for scheduled work*
+  (requires interaction with library development)
+  *(19 April)*
 
 Expectations on GROMACS master changes
 ======================================
