@@ -184,16 +184,69 @@ sed 's/ -->/\)\*/'
   (requires interaction with library development)
   *(19 April)*
 
-Expectations on GROMACS master changes
-======================================
+Expectations on Mark for Q1-Q2 2019 GROMACS master changes
+==========================================================
 
-* libgmxapi and libgromacs need to be combined
-* gmx Variant and types would be very helpful at API boundary
-* UI helpers should express
+* Broker and implement build system amenable to multiple use
+  cases. Need to be able to build and deploy python module from single
+  source repo that is usable (i.e. can run the acceptance tests).
+
+  - Some kind of nested structure likely appropriate, perhaps
+    structured as nested CMake projects that in principle could stand
+    alone. That's probably workable because nested projects can see
+    the parent project's cache variables (TODO check this)
+  - probably a top-level project coordinating a libgromacs build and a
+    python module build, with the former typically feeding the latter
+  - the libgromacs build may be able to leverage independent efforts
+    towards a multi-configuration build (so SIMD/MPI/GPU agnostic)
+  - top-level project offers much the same UI as now, passing much of
+    it through to the libgromacs project
+  - top-level project offers the option to find a Python (or be told
+    which to use), to find a libgromacs (or be told, or be told to
+    build), to build any necessary wrapper binaries (ie. classical gmx
+    and mdrun), and to deploy all linked artefacts to
+    CMAKE_INSTALL_PREFIX or the appropriate Python site-packages
+  - the top-level project will be used by e.g. setup.py wrapper
+    from scikit-build/distutils
+  - requires reform of compiler flags handling
+  - probably requires some re-organization of external dependencies
+    of libgromacs
+  - follow online "Modern CMake" best practices as far as practicable
+  - library should be available for static linking with position
+    independent code to allow a single shared object to be built for
+    the Python module.
+
+* Dissolve boundary between libgmxapi and libgromacs
+
+  - no effort on form and stability of the C++ headers and library in
+    2019, beyond what facilitates implementing the Python interface
+  - existing libgromacs declarations of "public API" and installed
+    headers removed
+
+* libgromacs to be able to be use an MPI communicator passed in,
+  rather than hard-coding MPI_COMM_WORLD anywhere. It is likely that
+  existing wrapper binaries can use the same mechanism to pass
+  MPI_COMM_WORLD to libgromacs.
+
+* UI helpers should express - TODO Eric, we need to clarify what is
+  meant here.
   - preferred name for datum as a string
   - setter
   - typing and type discovery
   - help text
   - (for CLI: short name for flag)
-* library should be available for static linking with position independent code
-  to allow a single shared-object to be built for the Python module.
+
+Possible GROMACS source changes whose impact is currently unknown
+=================================================================
+* gmx::Any (which is a flavour of C++17 std::any) type could be
+  helpful at API boundary. Also perhaps a flavour of C++17
+  std::optional or std::variant.
+
+GROMACS source changes deferred to later in 2019
+================================================
+* Build system works also from tarball
+* Build system can produce maximally static artefacts (for performance
+  on HPC infrastructure)
+* express grompp and mdrun options handling with gmx::Options to
+  prepare for future dictionary-like handling in Python without
+  serializing a .tpr file
