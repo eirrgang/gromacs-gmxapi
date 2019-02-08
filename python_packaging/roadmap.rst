@@ -60,7 +60,7 @@ Ref: https://github.com/kassonlab/gmxapi/blob/master/ci_scripts/test_installers.
 1. Python package can be installed from GROMACS source directory after GROMACS installation.
 2. Python package can be installed by a user from a hand-built GROMACS installation.
 3. Python package can be installed from a Linux binary GROMACS distribution using
-  appropriate optimized binary libraries.
+   appropriate optimized binary libraries.
 
 Typing
 ------
@@ -97,16 +97,16 @@ Sequence
 Features development sequence based on functional priorities and dependencies.
 
 .. extracted with
-python -c \
-"import json;
-print('\n'.join(
-    [str('* ' + '  '.join([line for line in cell['source']]))
+    python -c \
+    "import json;
+    print('\n'.join(
+      [str('* ' + '  '.join([line for line in cell['source']]))
         for cell in json.load(open('RequiredFunctionality.ipynb', 'r'))['cells']
         if cell['cell_type'] == 'markdown']
     )
-)" | \
-sed 's/<!-- /\*\(/' | \
-sed 's/ -->/\)\*/'
+    )" | \
+    sed 's/<!-- /\*\(/' | \
+    sed 's/ -->/\)\*/'
 
 * gmx.make_operation wraps importable Python code.
   *(24 January)*
@@ -228,13 +228,16 @@ Expectations on Mark for Q1-Q2 2019 GROMACS master changes
   existing wrapper binaries can use the same mechanism to pass
   MPI_COMM_WORLD to libgromacs.
 
-* UI helpers should express - TODO Eric, we need to clarify what is
-  meant here.
-  - preferred name for datum as a string
-  - setter
-  - typing and type discovery
-  - help text
-  - (for CLI: short name for flag)
+* UI helpers should express.
+  - preferred name for datum as a string: `nsteps`, `tau-t`, etc.
+  - setter (function object, pointer to a builder method, )
+  - typing and type discovery (could be deducible from setter, but something to allow user input checking, or determination
+    of the suitability of a data source to provide the given input)
+  - help text: can be recycled to provide auto-extracted documentation, command-line help, and annotation in Python docstrings.
+  - for CLI: short name for flag. E.g. 'p' for "topology_file"
+  - for compatibility: deprecated / alternate names. E.g. "nstlist" for "neighbor_list_rebuild_interval", or "orire" for
+    "enable_orientation_restraints"
+  - default values
 
 Possible GROMACS source changes whose impact is currently unknown
 =================================================================
