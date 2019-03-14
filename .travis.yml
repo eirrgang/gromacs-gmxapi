@@ -52,7 +52,7 @@ jobs:
         - docker push gmxapi/gromacs-$MATRIX:$FORKPOINT
         - docker push gmxapi/gromacs-$MATRIX:latest
     - stage: pygmxapi
-      env: MATRIX=mpich REF=fr0
+      env: MATRIX=mpich REF=fr1
       before_script:
         - source python_packaging/ci_scripts/gitrefs && export FORKPOINT
         - docker pull gmxapi/gromacs-$MATRIX
