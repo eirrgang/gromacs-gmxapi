@@ -49,36 +49,36 @@ def test_fr3():
     """FR3: Output proxy can be used as input."""
     with tempfile.TemporaryDirectory() as directory:
         file1 = os.path.join(directory, 'input')
-    file2 = os.path.join(directory, 'output')
+        file2 = os.path.join(directory, 'output')
 
-    # Make a shell script that acts like the type of tool we are wrapping.
-    scriptname = os.path.join(directory, 'clicommand.sh')
-    with open(scriptname, 'w') as fh:
-        fh.writelines(['#!' + gmx.util.which('bash'),
-                       '# Concatenate an input file and a string argument to an output file.',
-                       '# Mock a utility with the tested syntax.',
-                       '#     clicommand.sh "some words" -i inputfile -o outputfile',
-                       'echo $1 | cat - $3 > $5'])
-    os.chmod(scriptname, stat.S_IRWXU)
+        # Make a shell script that acts like the type of tool we are wrapping.
+        scriptname = os.path.join(directory, 'clicommand.sh')
+        with open(scriptname, 'w') as fh:
+            fh.writelines(['#!' + gmx.util.which('bash'),
+                           '# Concatenate an input file and a string argument to an output file.',
+                           '# Mock a utility with the tested syntax.',
+                           '#     clicommand.sh "some words" -i inputfile -o outputfile',
+                           'echo $1 | cat - $3 > $5'])
+        os.chmod(scriptname, stat.S_IRWXU)
 
-    line1 = 'first line'
-    filewriter1 = gmx.commandline_operation(scriptname,
-                                            input_files={'-i': os.devnull},
-                                            output_files={'-o': file1})
+        line1 = 'first line'
+        filewriter1 = gmx.commandline_operation(scriptname,
+                                                input_files={'-i': os.devnull},
+                                                output_files={'-o': file1})
 
-    line2 = 'second line'
-    filewriter2 = gmx.commandline_operation(scriptname,
-                                            input_files={'-i': filewriter1.output.file['-o']},
-                                            output_files={'-o': file2})
+        line2 = 'second line'
+        filewriter2 = gmx.commandline_operation(scriptname,
+                                                input_files={'-i': filewriter1.output.file['-o']},
+                                                output_files={'-o': file2})
 
-    filewriter2.run()
-    # Check that the files have the expected lines
-    with open(file1, 'r') as fh:
-        lines = [text.rstrip() for text in fh]
-    assert len(lines) == 1
-    assert lines[0] == line1
-    with open(file2, 'r') as fh:
-        lines = [text.rstrip() for text in fh]
-    assert len(lines) == 2
-    assert lines[0] == line1
-    assert lines[1] == line2
+        filewriter2.run()
+        # Check that the files have the expected lines
+        with open(file1, 'r') as fh:
+            lines = [text.rstrip() for text in fh]
+        assert len(lines) == 1
+        assert lines[0] == line1
+        with open(file2, 'r') as fh:
+            lines = [text.rstrip() for text in fh]
+        assert len(lines) == 2
+        assert lines[0] == line1
+        assert lines[1] == line2
