@@ -32,9 +32,16 @@
 #
 # To help us fund GROMACS development, we humbly ask that you cite
 # the research papers on the package. Check out http://www.gromacs.org.
+
+import os
+import stat
+import tempfile
 import unittest
 
+import pytest
+
 from gmxapi import commandline_operation
+from gmxapi import util
 
 
 class CommandLineOperationSimpleTestCase(unittest.TestCase):
@@ -65,6 +72,85 @@ class CommandLineOperationSimpleTestCase(unittest.TestCase):
         operation.run()
         assert operation.output.returncode == 0
 
+class CommandLineOperationPipelineTestCase(unittest.TestCase):
+    """Test dependent sequence of operations."""
+    def test_operation_dependence(self):
+        """Confirm that dependent operations are only executed after their dependencies.
 
-if __name__ == '__main__':
-    unittest.main()
+        In a sequence of two operations, write a two-line file one line at a time.
+        Use a user-provided filename as a parameter to each operation.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            fh, filename = tempfile.mkstemp(dir=directory)
+            os.close(fh)
+
+            line1 = 'first line'
+            subcommand = ' '.join(['echo', '"{}"'.format(line1), '>>', filename])
+            commandline = ['-c', subcommand]
+            filewriter1 = commandline_operation('bash', arguments=commandline)
+
+            line2 = 'second line'
+            subcommand = ' '.join(['echo', '"{}"'.format(line2), '>>', filename])
+            commandline = ['-c', subcommand]
+            filewriter2 = commandline_operation('bash', arguments=commandline, input=filewriter1)
+
+            filewriter2.run()
+            # Check that the file has the two expected lines
+            with open(filename, 'r') as fh:
+                lines = [text.rstrip() for text in fh]
+            assert len(lines) == 2
+            assert lines[0] == line1
+            assert lines[1] == line2
+
+    @pytest.xfail
+    def test_data_dependence(self):
+        """Confirm that data dependencies correctly establish resolvable execution dependencies.
+
+        In a sequence of two operations, write a two-line file one line at a time.
+        Use the output of one operation as the input of another.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            file1 = os.path.join(directory, 'input')
+            file2 = os.path.join(directory, 'output')
+
+            # Make a shell script that acts like the type of tool we are wrapping.
+            scriptname = os.path.join(directory, 'clicommand.sh')
+            with open(scriptname, 'w') as fh:
+                fh.writelines(['#!' + util.which('bash'),
+                               '# Concatenate an input file and a string argument to an output file.',
+                               '# Mock a utility with the tested syntax.',
+                               '#     clicommand.sh "some words" -i inputfile -o outputfile',
+                               'echo $1 | cat - $3 > $5'])
+            os.chmod(scriptname, stat.S_IRWXU)
+
+            line1 = 'first line'
+            filewriter1 = commandline_operation(scriptname,
+                                                input_files={'-i': os.devnull},
+                                                output_files={'-o': file1})
+
+            line2 = 'second line'
+            filewriter2 = commandline_operation(scriptname,
+                                                input_files={'-i': filewriter1.output.file['-o']},
+                                                output_files={'-o': file2})
+
+            filewriter2.run()
+            # Check that the files have the expected lines
+            with open(file1, 'r') as fh:
+                lines = [text.rstrip() for text in fh]
+            assert len(lines) == 1
+            assert lines[0] == line1
+            with open(file2, 'r') as fh:
+                lines = [text.rstrip() for text in fh]
+            assert len(lines) == 2
+            assert lines[0] == line1
+            assert lines[1] == line2
+
+    @pytest.xfail
+    def test_parallel_data_dependence(self):
+        """As in test_data_dependence, but with two independent data flows."""
+        assert True
+
+    @pytest.xfail
+    def test_broadcast_data_dependence(self):
+        """As in test_data_dependence, but with one operation feeding two independent consumers."""
+        assert True
