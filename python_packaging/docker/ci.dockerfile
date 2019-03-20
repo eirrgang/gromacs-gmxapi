@@ -49,8 +49,7 @@ USER testing
 # TODO: Clean up pip cache.
 RUN python3 -m venv $HOME/testing
 RUN . $HOME/testing/bin/activate && \
-    pip install --upgrade pip setuptools && \
-    pip install jupyter
+    pip install --upgrade pip setuptools
 
 ADD --chown=testing:testing requirements-test.txt /home/testing/gmxapi/
 

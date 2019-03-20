@@ -12,27 +12,6 @@ https://github.com/kassonlab/gmxapi-scripts
 
 ## Repository organization
 
-**TODO: sandbox branch for staging feature development**
-
-https://github.com/kassonlab/gromacs-gmxapi has a branch called `kassonLabFork`
-that is intended as a patch to the GROMACS master branch to allow separable, testable
-gmxapi feature development. The branch adds a `.travis.yml` and other differences
-supporting development and testing by the Kasson Lab.
-
-A squash of this branch could be used as the basis of a sandbox branch on Gerrit
-and the branch could be re-forked from there.
-
-GROMACS `master` can be merged into `kassonLabFork` as necessary or as feature
-requests are resolved.
-
-The `kassonlab` GitHub repository has feature-development branches from which Gerrit
-changes are intended to be extracted. Gerrit patch sets should be equivalent to the
-`diff` applied by the feature branch to the `kassonLabFork` branch. In other words,
-the Gerrit patch set for a proposed resolution to feature request `fr1`
-is derived from.
-
-    git rebase --onto gerrit_master kassonLabFork fr1
-
 **TODO: testing infrastructure and project management conventions to allow fully integrated development**
 **TODO: Consider long term homes of these directory contents.**
 
@@ -46,32 +25,26 @@ This allows C++ extension modules to be built against a user-chosen GROMACS inst
 but for a Python interpreter that is very likely different from that used
 by the system administrator who installed GROMACS.
 
-Current packaging:
+To test, first install GROMACS to `/path/to/gromacs`.
+Then, install and test in a Python virtualenv.
 
-    # Install GROMACS to /path/to/gromacs
     source /path/to/gromacs/bin/GMXRC
+    python3 -m venv $HOME/somevirtualenv
     source $HOME/somevirtualenv/bin/activate
     (cd src && pip install -r requirements.txt && pip install .)
     python -c 'import gmxapi as gmx'
     pytest src/test
     pytest test
 
-Intended packaging:
-
-    # Build and install GROMACS, which also builds and installs a Python sdist
-    source $HOME/somevirtualenv/bin/activate
-    pip install -r /path/to/gromacs/python-requirements.txt
-    pip install /path/to/gromacs/gmxapi*tar.gz
-    python -c 'import gmxapi as gmx'
-
-We can also consider PyPI source and binary distributions in the future.
+For additional discussion on packaging and distribution, see
+https://redmine.gromacs.org/issues/2896
 
 ## Docker and Travis-CI testing
 
 **TODO: Migrate to Jenkins-based CI as Docker infrastructure becomes available.**
 Infastructure described here is transitional and reflects our need to be able to see code work 
 in order to review it satisfactorily in the period before GROMACS CI infrastructure 
-is ready for the load. At some point the Docker and notebook aspects will change,
+is ready for the load. At some point the Docker aspects will change,
 or be removed as appropriate.
 
 The Python packaging will be tested on Jenkins with Docker-based CI, but this
