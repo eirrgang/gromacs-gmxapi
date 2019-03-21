@@ -42,6 +42,7 @@ import functools
 import inspect
 import weakref
 
+from gmxapi import exceptions
 
 class AbstractResult(abc.ABC):
     """A Result serves as a proxy to or "future" for data produced by gmxapi operations.
@@ -242,19 +243,32 @@ def function_wrapper(output=()):
         # TODO: Refactor with better annotated descriptors.
         # __slots__ can be considered arcane and a to be used only for optimizations.
         __slots__ = output_names
+        # Note that attribute fetches using named slots produce unhelpful AttributeError until the first assignment.
 
     class Publisher(object):
-        """Describe an entity that produces managed outputs dependent on managed inputs."""
-        def __init__(self, input):
+        """Describe an entity that produces managed outputs dependent on managed inputs.
+
+        Arguments:
+            instance : ResourceManager for this Publisher
+            input : fingerprint for data flow associated with published results
+
+        """
+        def __init__(self, instance, input:Input):
             self._input = Input(input.args, input.kwargs, input.dependencies)
-            self._outputs = {}
+            self._instance = instance
 
         def output(self, name):
+            """Register a named output.
+
+            Ask the resource manager to initialize resources for a named output that will be
+            published to.
+
+            Needs to be reworked wrt various "to do"s. Syntax currently implies this is an accessor,
+            but it is not implemented as such.
+            """
             # TODO: (FR5+) should be an implementation detail of the Context and Operation.
             # Outputs should be well defined before object creation and mutable only during session lifetime.
-            if name not in self._outputs:
-                self._outputs[name] = Output(name)
-            return self._outputs[name]
+            setattr(self._instance._data, name, None)
 
     class ResourceManager(object):
         """Provides data publication and subscription services.
@@ -279,6 +293,7 @@ def function_wrapper(output=()):
         # We will pass the `publisher` attribute to functions that use named outputs,
         # or capture the results of simple functions to assign to a resource named `output`.
         def __init__(self):
+            # TODO: reimplement as a data descriptor so that Publisher does not need a bound circular reference.
             self._publisher = None
             self._data = OutputCollection()
 
@@ -288,8 +303,9 @@ def function_wrapper(output=()):
             Note: This implementation assumes there is one ResourceManager instance per publisher,
             so we only stash the inputs and dependency information for a single set of resources.
             """
+            # TODO: reimplement as a data descriptor so we don't need the circular reference.
             if self._publisher is None:
-                self._publisher = Publisher(node._input)
+                self._publisher = Publisher(weakref.proxy(self), node._input)
             return self._publisher
 
         @property
@@ -312,11 +328,17 @@ def function_wrapper(output=()):
                 #  Use metaclass to configure descriptors for named outputs at higher scope.
                 # TODO: (FR3+) we want some container behavior, in addition to the attributes...
                 def __getattribute__(self, item):
-                    if item not in instance._publisher._outputs:
+                    if item not in output_names:
+                        # Note: This is properly a Python protocol exception, not a gmxapi exception.
                         raise AttributeError('Attribute requested is not a defined output.')
                     else:
+                        try:
+                            result = getattr(instance._data, item)
+                        except AttributeError:
+                            raise exceptions.ProtocolError(
+                                'Registered published outputs do not match outputs enumerated at Operation definition.')
                         # TODO: (FR3) Use Result proxy objects.
-                        return getattr(instance._data, item)
+                        return result
 
             return OutputDataProxy()
 

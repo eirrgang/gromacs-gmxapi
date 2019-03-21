@@ -72,6 +72,7 @@ class CommandLineOperationSimpleTestCase(unittest.TestCase):
         operation.run()
         assert operation.output.returncode == 0
 
+
 class CommandLineOperationPipelineTestCase(unittest.TestCase):
     """Test dependent sequence of operations."""
     def test_operation_dependence(self):
@@ -102,7 +103,7 @@ class CommandLineOperationPipelineTestCase(unittest.TestCase):
             assert lines[0] == line1
             assert lines[1] == line2
 
-    @pytest.xfail
+    @pytest.mark.xfail
     def test_data_dependence(self):
         """Confirm that data dependencies correctly establish resolvable execution dependencies.
 
@@ -145,12 +146,12 @@ class CommandLineOperationPipelineTestCase(unittest.TestCase):
             assert lines[0] == line1
             assert lines[1] == line2
 
-    @pytest.xfail
+    @pytest.mark.xfail
     def test_parallel_data_dependence(self):
         """As in test_data_dependence, but with two independent data flows."""
         assert True
 
-    @pytest.xfail
+    @pytest.mark.xfail
     def test_broadcast_data_dependence(self):
         """As in test_data_dependence, but with one operation feeding two independent consumers."""
         assert True

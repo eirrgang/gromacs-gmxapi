@@ -156,6 +156,8 @@ def cli(command=None, shell=None, output=None):
     # since we can just use the assignment operator.
     output.erroroutput = erroroutput
     output.returncode = returncode
+    # TODO: Handle the file output at the higher level wrapper.
+    # output.file = None
 
 
 # This doesn't need to be a formal operation. It can just generate the necessary data flow.
