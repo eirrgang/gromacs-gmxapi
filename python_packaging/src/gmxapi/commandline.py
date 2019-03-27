@@ -54,14 +54,25 @@ logger = logging.getLogger(__name__)
 logger.info('Importing gmxapi._commandline_operation')
 
 
+# Create an Operation that consumes a list and a boolean to produce a string and an integer.
 #
 # Wrap the defined function using a decorator that
-#    * strips the `output` argument from the signature
-#    * provides `output` to the inner function and
-#    * returns the output object when called with the shorter signature.
+#    * strips the `output` parameter from the signature
+#    * provides `output` publishing proxy to the inner function and
+#    * produce a result with attributes for
+#       * file: mapping of output flags to output filenames
+#       * erroroutput: text results in case of error
+#       * returncode: integer return code of wrapped command
 #
-@function_wrapper(output=['file', 'erroroutput', 'returncode'])
-def cli(command=None, shell=None, output=None):
+# Note that the existence of the 'file' output map is expressed here, but
+# the keys of the map are not implicit or set by the wrapped function.
+# For the map to be non-empty, it must be defined before the resulting helper
+# function is called.
+#
+# TODO: Operation returns the output object when called with the shorter signature.
+#
+@function_wrapper(output={'erroroutput': str, 'returncode': int})
+def cli(command:list = None, shell:bool = None, output=None):
     """Execute a command line program in a subprocess.
 
     Configure an executable in a subprocess. Executes when run in an execution
@@ -160,7 +171,9 @@ def cli(command=None, shell=None, output=None):
     # output.file = None
 
 
-# This doesn't need to be a formal operation. It can just generate the necessary data flow.
+# TODO: make this a formal operation.
+#  The consumer of this operation has an NDArray input. filemap may contain gmxapi data flow
+#  aspects that we want the framework to handle for us.
 def filemap_to_flag_list(filemap=None):
     """Convert a map of command line flags and filenames to a list of command line arguments.
 
@@ -168,7 +181,7 @@ def filemap_to_flag_list(filemap=None):
     User provides mappings of flags and filenames so that gmxapi can construct an
     executable command line.
 
-    Primary use case is implicit. commandline_operation() generates this operation based on
+    Primary use case is implicit. commandline_operation() instantiates this operation based on
     user input, and sends the output to cli()
 
     Arguments:
@@ -195,9 +208,10 @@ def filemap_to_flag_list(filemap=None):
 # in runtime implementation functions, but we can discourage it for the moment and
 # in the future we can check the current Context whenever getting a new operation
 # handle to decide if it is allowed. Such a check could only be performed after the work is launched, of course.
-def commandline_operation(executable=None, arguments=None, input_files=None, output_files=None, **kwargs):
-    """Helper function to execute a subprocess in gmxapi data flow.
+def commandline_operation(executable=None, arguments=(), input_files=None, output_files=None, **kwargs):
+    """Helper function to define a new operation that executes a subprocess in gmxapi data flow.
 
+    Define a new Operation for a particular executable and input/output parameter set.
     Generate a chain of operations to process the named key word arguments and handle
     input/output data dependencies.
 
@@ -214,12 +228,55 @@ def commandline_operation(executable=None, arguments=None, input_files=None, out
         * `returncode`: return code of the subprocess.
 
     """
-    command = concatenate_lists((executable,
+    # Questions:
+    #  * Are the members of `output` statically specified?
+    #  * Are the keys of a Map statically specified?
+    #  * Is `output` a Map?
+    # Answers:
+    # Compiled code should be able to discover an output format. A Map may have different keys depending
+    # on the work and user input, even when consumed or produced by compiled code. (A Map with statically
+    # specified keys would be a schema, which will not be implemented for a while.) Therefore, `output`
+    # is not a Map or a Result of Map type, but a ResultCollection or ResultCollectionDescriptor
+    # (which may be the output version of the future schema implementation).
+
+
+
+    # Implementation details: When used in a script, this function returns an instance of an operation.
+    # However, because of the dynamic specification of inputs and outputs, each invocation may have
+    # the overhead of defining new types to express the data flow topology, regardless of the executable.
+    # If this overhead is problematic, consider exposing the intermediate step at which the Operation is
+    # fully specified to facilitate reuse.
+
+    # 1. Define a new operation with outputs from `cli()` plus `file` from `output_files`
+
+    # output_files is essentially passed through, but we need assurance that results
+    # will not be published until the rest of the operation has run (i.e. the cli() executable.)
+
+    @function_wrapper(output={'erroroutput': str, 'returncode': int, 'file': dict})
+    def merged_ops(erroroutput=None, returncode=None, file=None, output=None):
+        output.file = file
+        output.returncode = returncode
+        output.erroroutput = erroroutput
+
+    # 2. Prepare data flow.
+
+    command = concatenate_lists([[executable],
                                  arguments,
                                  filemap_to_flag_list(input_files),
-                                 filemap_to_flag_list(output_files)))
+                                 filemap_to_flag_list(output_files)])
     shell = make_constant(False)
     cli_args = {'command': command,
                 'shell': shell}
     cli_args.update(kwargs)
-    return cli(**cli_args)
+
+    # Note: Without a `label` argument, repeated calls to cli(**cli_args) should produce references to the same unique resource.
+    # Creating this handle separately should not be necessary, but we've got a way to go until we have the
+    # fingerprinting and Context resource management we need for that.
+    cli_result = cli(**cli_args)
+    merged_result = merged_ops(erroroutput=cli_result.output.erroroutput,
+                               returncode=cli_result.output.returncode,
+                               file=output_files)
+
+    # Return an object with an OutputCollection granting access to outputs of cli() and of
+    # output_files (as "file")
+    return merged_result

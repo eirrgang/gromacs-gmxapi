@@ -40,8 +40,43 @@ import unittest
 
 import pytest
 
+import gmxapi as gmx
 from gmxapi import commandline_operation
 from gmxapi import util
+
+
+class ImmediateResultTestCase(unittest.TestCase):
+    """Test data model and data flow for basic operations."""
+    def test_scalar(self):
+        operation = gmx.operation.make_constant(42)
+        assert isinstance(operation.dtype, type)
+        assert operation.dtype == int
+        assert operation.result() == 42
+
+    def test_list(self):
+        list_a = (1,2,3)
+
+        # TODO: test input validation
+        list_result = gmx.operation.concatenate_lists(sublists=[list_a])
+        # TODO: should be NDArray
+        assert list_result.dtype == type(list_a)
+        # Note: this is specifically for the built-in tuple type.
+        # Equality comparison may work differently for different sequence types.
+        assert tuple(list_result.result()) == tuple(list_a)
+        assert len(list_result.result()) == len(list_a)
+
+        list_result = gmx.operation.concatenate_lists([list_a, list_a])
+        assert len(list_result.result()) == len(list_a) * 2
+        assert tuple(list_result.result()) == tuple(list_a + list_a)
+
+        list_b = gmx.operation.make_constant([42])
+
+        list_result = gmx.operation.concatenate_lists(sublists=[list_b])
+        assert list_result.result()[0] == 42
+
+        list_result = gmx.operation.append_list(list_a, list_b)
+        assert len(list_result.result()) == len(list_a) + 1
+        assert tuple(list_result.result()) == tuple(list(list_a) + [42])
 
 
 class CommandLineOperationSimpleTestCase(unittest.TestCase):
@@ -59,18 +94,18 @@ class CommandLineOperationSimpleTestCase(unittest.TestCase):
         assert hasattr(operation.output, 'returncode')
         operation.run()
         # assert operation.output.returncode.result() == 0
-        assert operation.output.returncode == 0
+        assert operation.output.returncode.result() == 0
 
     def test_false(self):
         operation = commandline_operation(executable='false')
         operation.run()
-        assert operation.output.returncode == 1
+        assert operation.output.returncode.result() == 1
 
     def test_echo(self):
         # TODO: (FR5+) do we want to pipeline or checkpoint stdout somehow?
         operation = commandline_operation(executable='echo', arguments=['hi there'])
         operation.run()
-        assert operation.output.returncode == 0
+        assert operation.output.returncode.result() == 0
 
 
 class CommandLineOperationPipelineTestCase(unittest.TestCase):
@@ -155,3 +190,7 @@ class CommandLineOperationPipelineTestCase(unittest.TestCase):
     def test_broadcast_data_dependence(self):
         """As in test_data_dependence, but with one operation feeding two independent consumers."""
         assert True
+
+
+if __name__ == '__main__':
+    unittest.main()

@@ -38,12 +38,16 @@ Provide decorators and base classes to generate and validate gmxapi Operations.
 
 import abc
 import collections
+from contextlib import contextmanager
 import functools
 import inspect
 import weakref
 
+
 from gmxapi import exceptions
 
+# TODO: Instead of a base class to inherit, just provide a metaclass for validation.
+#  abc.ABC is too strict for now and the base class does not provide any useful heritable functionality.
 class AbstractResult(abc.ABC):
     """A Result serves as a proxy to or "future" for data produced by gmxapi operations.
 
@@ -53,12 +57,15 @@ class AbstractResult(abc.ABC):
     of data dependencies, triggering any necessary computation and communication, to return
     an object of the data type represented by the Result. If the Result is a container for other
     Results, nested Results are also resolved to local concrete data.
-    """
 
-    # TODO: (FR5+) A Result should defer implementation details to the Context or parent operation.
+    Classes that provide named Results use a ResultDescriptor that provides a getter that returns
+    an object with the Result interface.
+    """
+    # TODO: A Result should defer implementation details to the Context or parent operation.
     # Note: A Result instance should not need to hold more than a weakref, if even that, to a
     # Context instance, and no reference to an Operation instance.
-
+    #@property
+    # @abc.abstractmethod
     @property
     def uid(self):
         """Get a unique identifier by which this result can be identified.
@@ -88,16 +95,36 @@ class AbstractResult(abc.ABC):
     # an `output` attribute that gets a pure Result copy of the Result handle.
     # """
 
+    # @property
+    # @abc.abstractmethod
+    # def output(self):
+    #     return self.resulttype(self)
+
+    # TODO: A Result needs to provide a way to get/validate a handle in the (new) Context of a subscriber.
+
+    # TODO: We might reformulate Result as derived from concurrent.futures.Future
+    # but it is currently conceptually dissimilar in that the availability of a Result
+    # does not depend on having `submit`ed a task, but rather on describing tasks to be submitted.
+    @abc.abstractmethod
+    def result(self):
+        """Get the represented data as a local object."""
+        # Maybe a generic implementation would look like this.
+        # TODO: Check for valid resource manager.
+        # TODO: Check whether uid is registered with resource manager
+        # TODO: do we need to provide a reference to this object and/or its class
+        #       to allow Context to lazily create and perform the operation at call time?
+        self._resource_manager.get(self.uid)
+
     @property
     @abc.abstractmethod
-    def dtype(self):
+    def dtype(self) -> type:
         """Base data type of the result.
 
         Used to determine compatibility with the mapped inputs of consuming operations.
         """
         # At any point in time, the resource represented by this result may be in some abstract state
         # and may by an array of data sources that will be scattered to consumers.
-        return None
+        return type(None)
 
 
 # Result scenarios:
@@ -127,8 +154,9 @@ class ImmediateResult(AbstractResult):
         self.__input = input
         self.__cached_value = implementation(*input.args, **input.kwargs)
         # TODO: (FR4) need a utility to resolve the base type of a value that may be a proxy object.
-        self._dtype = None
+        self._dtype = type(self.__cached_value)
 
+    @property
     def dtype(self):
         return self._dtype
 
@@ -138,22 +166,22 @@ class ImmediateResult(AbstractResult):
 
 def computed_result(function):
     """Decorate a function to get a helper that produces an object with Result behavior.
-    """
 
+    When called, the new function produces an ImmediateResult object.
+
+    The new function has the same signature as the original function, but can accept
+    proxy objects (Result objects) for arguments if the provided proxy objects represent
+    a type compatible with the original signature.
+
+    The ImmediateResult object will be evaluated in the local Context by the time its `result()`
+    method returns the first time. Other than that, the API does not specify when input
+    data dependencies will be resolved or when the wrapped function will be executed.
+
+    Calls to `result()` return the value that `function` would return when executed in
+    the local context with the inputs fully resolved.
+    """
     @functools.wraps(function)
     def new_function(*args, **kwargs):
-        """When called, the new function produces an ImmediateResult object.
-
-        The new function has the same signature as the original function, but can accept
-        proxy objects (Result objects) for arguments if the provided proxy objects represent
-        a type compatible with the original signature.
-
-        The ImmediateResult object will be evaluated in the local Context when its `result()`
-        method is called the first time.
-
-        Calls to `result()` return the value that `function` would return when executed in
-        the local context with the inputs fully resolved.
-        """
         # The signature of the new function will accept abstractions of whatever types it originally accepted.
         # * Create a mapping to the original call signature from `input`
         # * Add handling for typed abstractions in wrapper function.
@@ -166,28 +194,47 @@ def computed_result(function):
         # TODO: (FR3+) create a serializable data structure for inputs discovered from function introspection.
 
         # TODO: (FR4) handle typed abstractions in input arguments
-        input_pack = sig.bind(*args, **kwargs)
+
+        input_list = []
+        for arg in args:
+            if hasattr(arg, 'result'):
+                input_list.append(arg.result())
+            else:
+                input_list.append(arg)
+        input_dict = {}
+        for name, value in kwargs.items():
+            if hasattr(value, 'result'):
+                input_dict[name] = value.result()
+            else:
+                input_dict[name] = value
+
+        input_pack = sig.bind(*input_list, **input_dict)
 
         result_object = ImmediateResult(function, input_pack)
         return result_object
 
     return new_function
 
-
 @computed_result
-def concatenate_lists(sublists=()):
-    """Trivial data flow restructuring operation to combine data sources into a single list."""
+def append_list(a:list=(), b:list=()):
+    """Operation that consumes two lists and produces a concatenated single list."""
     # TODO: (FR3) Each sublist or sublist element could be a "future" handle; make sure input provider resolves that.
     # TODO: (FR4) Returned list should be an NDArray.
-    full_list = []
-    for sublist in sublists:
-        if sublist is not None:
-            if isinstance(sublist, (str, bytes)):
-                full_list.append(sublist)
-            else:
-                full_list.extend(sublist)
-    return full_list
+    for arg in (a, b):
+        if isinstance(arg, (str, bytes)):
+            raise exceptions.ValueError('Input must be a pair of lists.')
+    return list(a) + list(b)
 
+def concatenate_lists(sublists:list=()):
+    """Trivial data flow restructuring operation to combine data sources into a single list."""
+    if isinstance(sublists, (str, bytes)):
+        raise exceptions.ValueError('Input must be a list of lists.')
+    if len(sublists) == 1:
+        return make_constant(sublists[0])
+    if len(sublists) == 2:
+        return append_list(sublists[0], sublists[1])
+    else:
+        return append_list(sublists[0], concatenate_lists(sublists[1:]))
 
 @computed_result
 def make_constant(value):
@@ -197,8 +244,14 @@ def make_constant(value):
     """
     return type(value)(value)
 
+# In the longer term, Contexts could provide metaclasses that allow transformation or dispatching
+# of the basic aspects of the operation protocols between Contexts or from a result handle into a
+# new context, based on some attribute or behavior in the result handle.
 
-def function_wrapper(output=()):
+# TODO: For outputs, distinguish between "results" and "events".
+#  Both are published to the resource manager in the same way, but the relationship
+#  with subscribers is potentially different.
+def function_wrapper(output=None):
     """Generate a decorator for wrapped functions with signature manipulation.
 
     New function accepts the same arguments, with additional arguments required by
@@ -207,7 +260,7 @@ def function_wrapper(output=()):
     The new function returns an object with an `output` attribute containing the named outputs.
 
     Example:
-        @function_wrapper(output=['spam', 'foo'])
+        @function_wrapper(output={'spam': str, 'foo': str})
         def myfunc(parameter=None, output=None):
             output.spam = parameter
             output.foo = parameter + ' ' + parameter
@@ -231,44 +284,114 @@ def function_wrapper(output=()):
     # that takes the context as the first argument. (`singledispatch` inspects the first argument rather
     # that a named argument)
 
-    output_names = list([name for name in output])
+    # Implementation note: The closure of the current function is used to
+    # dynamically define several classes that support the operation to be
+    # created by the returned decorator.
 
     # Encapsulate the description of the input data flow.
     Input = collections.namedtuple('Input', ('args', 'kwargs', 'dependencies'))
 
     # Encapsulate the description of a data output.
-    Output = collections.namedtuple('Output', ('name'))
-
-    class OutputCollection(object):
-        # TODO: Refactor with better annotated descriptors.
-        # __slots__ can be considered arcane and a to be used only for optimizations.
-        __slots__ = output_names
-        # Note that attribute fetches using named slots produce unhelpful AttributeError until the first assignment.
+    Output = collections.namedtuple('Output', ('name', 'dtype', 'done', 'data'))
 
     class Publisher(object):
-        """Describe an entity that produces managed outputs dependent on managed inputs.
-
-        Arguments:
-            instance : ResourceManager for this Publisher
-            input : fingerprint for data flow associated with published results
-
+        """Data descriptor for write access to a specific named data resource.
         """
-        def __init__(self, instance, input:Input):
-            self._input = Input(input.args, input.kwargs, input.dependencies)
+        def __init__(self, name, dtype):
+            # self._input = Input(input.args, input.kwargs, input.dependencies)
+            # self._instance = instance
+            self.name = name
+            self.dtype = dtype
+
+        def __get__(self, instance, owner):
+            if instance is None:
+                # Access through class attribute of owner class
+                return self
+            resource_manager = instance._instance
+            return getattr(resource_manager._data, self.name)
+
+        def __set__(self, instance, value):
+            resource_manager = instance._instance
+            resource_manager.set_result(self.name, value)
+
+    class DataProxyBase(object):
+        """Limited interface to managed resources.
+
+        Inherit from DataProxy to specialize an interface to an ``instance``.
+        In the derived class, either do not define ``__init__`` or be sure to
+        initialize the super class (DataProxy) with an instance of the object
+        to be proxied.
+
+        Acts as an owning handle to ``instance``, preventing the reference count
+        of ``instance`` from going to zero for the lifetime of the proxy object.
+        """
+        def __init__(self, instance):
             self._instance = instance
 
-        def output(self, name):
-            """Register a named output.
+    # Dynamically define a type for the PublishingDataProxy using a descriptor for each attribute.
+    # TODO: Encapsulate this bit of script in a metaclass definition.
+    namespace = {}
+    for name, dtype in output.items():
+        namespace[name] = Publisher(name, dtype)
+    namespace['__doc__'] = "Handler for write access to the `output` of an operation.\n\n" + \
+                           "Acts as a sort of PublisherCollection."
+    PublishingDataProxy = type('PublishingDataProxy', (DataProxyBase,), namespace)
 
-            Ask the resource manager to initialize resources for a named output that will be
-            published to.
+    class ResultGetter(object):
+        """Fetch data to the caller's Context.
 
-            Needs to be reworked wrt various "to do"s. Syntax currently implies this is an accessor,
-            but it is not implemented as such.
-            """
-            # TODO: (FR5+) should be an implementation detail of the Context and Operation.
-            # Outputs should be well defined before object creation and mutable only during session lifetime.
-            setattr(self._instance._data, name, None)
+                    Returns an object of the concrete type specified according to
+                    the operation that produces this Result.
+                    """
+        def __init__(self, resource_manager, name, dtype):
+            self.resource_manager = resource_manager
+            self.name = name
+            self.dtype = dtype
+
+        def __call__(self):
+            # TODO: Tell the resource manager to resolve data dependencies
+            self.resource_manager.update_output()
+            assert self.resource_manager._data[self.name].done
+            # Return ownership of concrete data
+            return self.resource_manager._data[self.name].data
+
+    class Future(object):
+        def __init__(self, resource_manager, name, dtype):
+            self.name = name
+            if not isinstance(dtype, type):
+                raise exceptions.ValueError('dtype argument must specify a type.')
+            self.dtype = dtype
+            self.result = ResultGetter(resource_manager, name, dtype)
+
+    class OutputDescriptor(object):
+        """Read-only data descriptor for proxied output access.
+
+        Knows how to get a Future from the resource manager.
+        """
+        def __init__(self, name, dtype):
+            self.name = name
+            self.dtype = dtype
+
+        def __get__(self, proxy, owner):
+            if proxy is None:
+                # Access through class attribute of owner class
+                return self
+            return proxy._instance.future(self.name, self.dtype)
+
+    class OutputDataProxy(DataProxyBase):
+        """Handler for read access to the `output` member of an operation handle.
+
+        Acts as a sort of ResultCollection.
+
+        A ResourceManager creates an OutputDataProxy instance at initialization to
+        provide the ``output`` property of an operation handle.
+        """
+        # TODO: Needs to know the output schema of the operation,
+        #  so type definition is a detail of the operation definition. (Could be "templated" on Context type)
+        # TODO: (FR3+) We probably want some other container behavior, in addition to the attributes...
+
+    for name, dtype in output.items():
+        setattr(OutputDataProxy, name, OutputDescriptor(name, dtype))
 
     class ResourceManager(object):
         """Provides data publication and subscription services.
@@ -276,85 +399,161 @@ def function_wrapper(output=()):
         Owns data published by operation implementation or served to consumers.
         Mediates read and write access to the managed data streams.
 
-        The `publisher` attribute is an object that can have pre-declared resources assigned as attributes.
+        The `publisher` attribute is an object that can have pre-declared resources
+        assigned to as attributes by an operation publishing its results.
 
         The `data` attribute is an object with pre-declared resources available through
         attribute access. Reading an attribute produces a new Result proxy object for
         pre-declared data or raises an AttributeError.
 
         TODO: This functionality should evolve to be a facet of Context implementations.
+         There should be no more than one ResourceManager instance per work graph node in a Context.
+         This will soon be at odds with letting the ResourceManager be owned by an operation instance handle.
         TODO: The publisher and data objects can be more strongly defined through interaction between the Context and clients.
         """
 
-        # Internal interface: ResourceManager provides _results_proxy(), _results_cache(), and _publish() methods.
-        # These look up (or assign) the named item and either generate a new Result proxy object,
-        # return the currently cached value (or None if not cached), or publish and cache the provided value.
+        @contextmanager
+        def __publishing_context(self):
+            """Get a context manager for resolving the data dependencies of this node.
 
-        # We will pass the `publisher` attribute to functions that use named outputs,
-        # or capture the results of simple functions to assign to a resource named `output`.
-        def __init__(self):
-            # TODO: reimplement as a data descriptor so that Publisher does not need a bound circular reference.
-            self._publisher = None
-            self._data = OutputCollection()
+            Use the returned object as a Python context manager.
+            'output' type resources can be published exactly once, and only while the
+            publishing context is active.
 
-        def publisher(self, node):
-            """Get a handle to a publishing resource for the referenced output.
+            Responsibilities of the context manager are to:
+                * Make sure dependencies are resolved.
+                * Prepare read-only part of resources (input)
+                * Make sure outputs are marked 'done' before releasing lock.
 
-            Note: This implementation assumes there is one ResourceManager instance per publisher,
-            so we only stash the inputs and dependency information for a single set of resources.
             """
-            # TODO: reimplement as a data descriptor so we don't need the circular reference.
-            if self._publisher is None:
-                self._publisher = Publisher(weakref.proxy(self), node._input)
-            return self._publisher
+
+            # TODO:
+            # if self._data.done():
+            #     raise exceptions.ProtocolError('Resources have already been published.')
+            resource = PublishingDataProxy(weakref.proxy(self))
+            try:
+                yield resource
+            finally:
+                self.done = True
+
+        def __init__(self, input_fingerprint=None, runner=None):
+            """Initialize a resource manager for the inputs and outputs of an operation.
+
+            Arguments:
+                runner : callable to be called once to set output data
+                input_fingerprint : Uniquely identifiable input data description
+
+            """
+            assert callable(runner)
+            assert input_fingerprint is not None
+
+            # Note: This implementation assumes there is one ResourceManager instance per data source,
+            # so we only stash the inputs and dependency information for a single set of resources.
+            # TODO: validate input_fingerprint as its interface becomes clear.
+            self._input_fingerprint = input_fingerprint
+
+            self._data = {name: Output(name=name, dtype=dtype, done=False, data=None) for name, dtype in output.items()}
+
+            # TODO: reimplement as a data descriptor so that Publisher does not need a bound circular reference.
+            self._publisher = PublishingDataProxy(weakref.proxy(self))
+            self.__publishing_resources = [self.__publishing_context()]
+
+            self.done = False
+            self._runner = runner
+            self.__operation_entrance_counter = 0
+
+        def set_result(self, name, value):
+            self._data[name] = Output(name=name,
+                                      dtype=self._data[name].dtype,
+                                      done=True,
+                                      data=self._data[name].dtype(value))
+
+        def update_output(self):
+            """Bring the output of the bound operation up to date.
+
+            Execute the bound operation once if and only if it has not
+            yet been run in the lifetime of this resource manager.
+
+            Used internally to implement Futures for the local operation
+            associated with this resource manager.
+
+            TODO: We need a different implementation for an operation whose output
+             is served by multiple resource managers. E.g. an operation whose output
+             is available across the ensemble, but which should only be executed on
+             a single ensemble member.
+            """
+            # This code is not intended to be reentrant. We make a modest attempt to
+            # catch unexpected reentrance, but this is not (yet) intended to be a thread-safe
+            # resource manager implementation.
+            if not self.done:
+                self.__operation_entrance_counter += 1
+                if self.__operation_entrance_counter > 1:
+                    raise exceptions.ProtocolError('Bug detected: resource manager tried to execute operation twice.')
+                self._runner()
+
+        def future(self, name:str=None, dtype=None):
+            """Retrieve a Future for a named output.
+
+            TODO: (FR5+) Normalize this part of the interface between operation definitions and
+             resource managers.
+            """
+            if not isinstance(name, str) or not name in self._data:
+                raise exceptions.ValueError('"name" argument must name an output.')
+            assert dtype is not None
+            return Future(self, name, dtype)
+
+        def data(self):
+            """Get an adapter to the output resources to access results."""
+            return OutputDataProxy(self)
+
+        @contextmanager
+        def local_input(self):
+            """In an API session, get a handle to fully resolved locally available input data.
+
+            Execution dependencies are resolved on creation of the context manager. Input data
+            becomes available in the ``as`` object when entering the context manager, which
+            becomes invalid after exiting the context manager. Resources allocated to hold the
+            input data may be released when exiting the context manager.
+
+            It is left as an implementation detail whether the context manager is reusable and
+            under what circumstances one may be obtained.
+            """
+            # TODO: Localize data
+            # Prepare input data structure
+            yield self._input_fingerprint
+
+        def publishing_resources(self):
+            """Get a context manager for resolving the data dependencies of this node.
+
+            Use the returned object as a Python context manager.
+            'output' type resources can be published exactly once, and only while the
+            publishing context is active.
+
+            Write access to publishing resources can be granted exactly once during the
+            resource manager lifetime and conveys exclusive access.
+            """
+            return self.__publishing_resources.pop()
+
+        ###
+        # TODO: Need a facility to resolve inputs, chasing dependencies...
+        ###
 
         @property
         def _dependencies(self):
-            return self._publisher._input.dependencies
+            for arg in self._input_fingerprint.args:
+                if hasattr(arg, 'result') and callable(arg.result):
+                    yield arg
+            for _, arg in self._input_fingerprint.kwargs.items():
+                if hasattr(arg, 'result') and callable(arg.result):
+                    yield arg
+            for item in self._input_fingerprint.dependencies:
+                yield item
 
-        @property
-        def output_data_proxy(self):
-            """Get a Results data proxy.
-
-            The object returned has an attribute for each output named by the publisher.
-            """
-            # TODO: (FR5+) Should be an implementation detail of the context implementation.
-            # The gmxapi Python package provides context implementations with ensemble management.
-            # A simple operation should be able to easily get an OutputResource generator and/or
-            # provide a module-specific implementation.
-            instance = weakref.proxy(self)
-            class OutputDataProxy(object):
-                # TODO: Clean up implementation.
-                #  Use metaclass to configure descriptors for named outputs at higher scope.
-                # TODO: (FR3+) we want some container behavior, in addition to the attributes...
-                def __getattribute__(self, item):
-                    if item not in output_names:
-                        # Note: This is properly a Python protocol exception, not a gmxapi exception.
-                        raise AttributeError('Attribute requested is not a defined output.')
-                    else:
-                        try:
-                            result = getattr(instance._data, item)
-                        except AttributeError:
-                            raise exceptions.ProtocolError(
-                                'Registered published outputs do not match outputs enumerated at Operation definition.')
-                        # TODO: (FR3) Use Result proxy objects.
-                        return result
-
-            return OutputDataProxy()
-
-        @property
-        def publishing_proxy(self):
-            """Get a handle to the output publishing machinery.
-            """
-            # The object returned has an attribute for each output named in the publisher.
-            # TODO: Attributes should only be writable through a well-defined publishing protocol.
-            # TODO: writing to the named outputs should allow notifications to be generated.
-            return self._data
 
     def decorator(function):
         @functools.wraps(function)
         def new_helper(*args, **kwargs):
-            def get_resource_manager():
+            def get_resource_manager(instance):
                 """Provide a reference to a resource manager for the dynamically defined Operation.
 
                 Initial Operation implementation must own ResourceManager. As more formal Context is
@@ -362,7 +561,7 @@ def function_wrapper(output=()):
                 between the facet of the Context-level resource manager to which the Operation has access
                 and the whole of the managed resources.
                 """
-                return ResourceManager()
+                return ResourceManager(input_fingerprint=instance._input, runner=instance.run)
 
             class Operation(object):
                 """Dynamically defined Operation implementation.
@@ -386,24 +585,40 @@ def function_wrapper(output=()):
                     """
                     ## Define the unique identity and data flow constraints of this work graph node.
                     input_args = tuple(args)
-                    input_kwargs = {key: value for key, value in kwargs.items()}
                     # TODO: (FR3) generalize
                     input_dependencies = []
 
+                    # TODO: Resolve the rigor of the input schema.
+                    # 1. Input structure is strongly specified / allowed parameters defined in class.
+                    #    The class definition does not need to be nested in new_helper. Inspection of
+                    #    the class makes it easy for the framework to preprocess arguments and provide
+                    #    localized data.
+                    # 2. Input is only specified as far as being a Map.
+                    #    Contents of the Map need to be processed (recursively TBD) to resolve all data flow.
+                    #
+                    # TODO: Make allowed input strongly specified in the Operation definition.
+                    # TODO: Resolve execution dependencies at run() and make non-data
+                    #  execution `dependencies` just another input that takes the default
+                    #  output of an operation and doesn't do anything with it.
+
                     # If present, kwargs['input'] is treated as an input "pack" providing _default_ values.
-                    if 'input' in input_kwargs:
-                        provided_input = input_kwargs.pop('input')
+                    input_kwargs = {}
+                    if 'input' in kwargs:
+                        provided_input = kwargs.pop('input')
                         if provided_input is not None:
                             # Try to determine what 'input' is.
-                            # TODO: (FR5+) handling should be related to Context...
+                            # TODO: (FR5+) handling should be related to Context.
+                            #  The process of accepting input arguments includes resolving placement in
+                            #  a work graph and resolving the Context responsibilities for graph nodes.
                             if hasattr(provided_input, 'run'):
                                 input_dependencies.append(provided_input)
                             else:
                                 # Assume a parameter pack is provided.
                                 for key, value in provided_input.items():
-                                    if key not in input_kwargs:
-                                        input_kwargs[key] = value
+                                    input_kwargs[key] = value
+                    assert 'input' not in kwargs
                     assert 'input' not in input_kwargs
+                    input_kwargs = {key: value for key, value in kwargs.items()}
 
                     self.__input = Input(args=input_args,
                                          kwargs=input_kwargs,
@@ -416,13 +631,7 @@ def function_wrapper(output=()):
                     # Implementation suggestion: Context-provided metaclass defines resource manager
                     # interface for this Operation. Factory function initializes compartmentalized
                     # resource management at object creation.
-                    self.__resource_manager = get_resource_manager()
-                    for name in output_names:
-                        # All outputs are assumed to depend on all inputs, so we don't need to provide
-                        # anything more specific than this object. The interface with the resource manager
-                        # is a separate (lower level) detail.
-                        node = self.__resource_manager.publisher(self)
-                        node.output(name)
+                    self.__resource_manager = get_resource_manager(self)
 
                 @property
                 def _input(self):
@@ -437,12 +646,15 @@ def function_wrapper(output=()):
                     # for managing hardware resources or data placement for operations implemented in the
                     # same librarary. That would be well in the future, though, and could also be accomplished
                     # with other means, so here I'm assuming one resource manager handle instance per Operation handle instance.
-
+                    #
                     # TODO: Allow both structured and singular output.
                     #  Either return self._resource_manager.data or self._resource_manager.data.output
-                    return self.__resource_manager.output_data_proxy
+                    # TODO: We can configure `output` as a data descriptor instead of a property so that we
+                    #  can get more information from the class attribute before creating an instance.
+                    # The C++ equivalence would probably be a templated free function for examining traits.
+                    return self.__resource_manager.data()
 
-                # TODO: (FR5+) This should be composed with help from the Context implementation.
+                # TODO: (FR5+) This behavior should be composed in with help from the Context implementation.
                 def run(self):
                     """Make a single attempt to resolve data flow conditions.
 
@@ -469,26 +681,37 @@ def function_wrapper(output=()):
                     """
                     # TODO: (FR3) take action only if outputs are not already done.
                     # TODO: (FR3) make sure this gets run if outputs need to be satisfied for `result()`
-                    for dependency in self.__resource_manager._dependencies:
-                        dependency.run()
+                    # for dependency in self.__resource_manager._dependencies:
+                    #     dependency.run()
                     args = []
-                    for arg in self.__resource_manager._publisher._input.args:
-                        # TODO: (FR3+) be more rigorous...
-                        if hasattr(arg, 'result'):
-                            args.append(arg.result())
-                        else:
-                            args.append(arg)
+                    try:
+                        for arg in self.__resource_manager._input_fingerprint.args:
+                            # TODO: (FR3+) be more rigorous.
+                            #  This should probably also use a sort of Context-based pub-sub rather than
+                            #  the result() method, which is explicitly for moving data across the API boundary.
+                            if hasattr(arg, 'result'):
+                                args.append(arg.result())
+                            else:
+                                args.append(arg)
+                    except Exception as E:
+                        raise exceptions.ApiError('input_fingerprint not iterating on "args" attr as expected.') from E
+
                     kwargs = {}
-                    for key, value in self.__resource_manager._publisher._input.kwargs.items():
-                        if hasattr(value, 'result'):
-                            kwargs[key] = value.result()
-                        else:
-                            kwargs[key] = value
+                    try:
+                        for key, value in self.__resource_manager._input_fingerprint.kwargs.items():
+                            if hasattr(value, 'result'):
+                                kwargs[key] = value.result()
+                            else:
+                                kwargs[key] = value
+                    except Exception as E:
+                        raise exceptions.ApiError('input_fingerprint not iterating on "kwargs" attr as expected.') from E
 
                     assert 'input' not in kwargs
                     # TODO: Allow both structured and singular output.
                     #  For simple functions, just capture and publish the return value.
-                    function(*args, output=self.__resource_manager.publishing_proxy, **kwargs)
+                    with self.__resource_manager.local_input() as input:
+                        with self.__resource_manager.publishing_resources() as output:
+                            function(*input.args, output=output, **input.kwargs)
 
             operation = Operation(*args, **kwargs)
             return operation
