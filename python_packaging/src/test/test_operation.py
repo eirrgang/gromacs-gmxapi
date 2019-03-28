@@ -54,7 +54,7 @@ class ImmediateResultTestCase(unittest.TestCase):
         assert operation.result() == 42
 
     def test_list(self):
-        list_a = (1,2,3)
+        list_a = [1,2,3]
 
         # TODO: test input validation
         list_result = gmx.operation.concatenate_lists(sublists=[list_a])
@@ -152,20 +152,22 @@ class CommandLineOperationPipelineTestCase(unittest.TestCase):
             # Make a shell script that acts like the type of tool we are wrapping.
             scriptname = os.path.join(directory, 'clicommand.sh')
             with open(scriptname, 'w') as fh:
-                fh.writelines(['#!' + util.which('bash'),
-                               '# Concatenate an input file and a string argument to an output file.',
-                               '# Mock a utility with the tested syntax.',
-                               '#     clicommand.sh "some words" -i inputfile -o outputfile',
-                               'echo $1 | cat - $3 > $5'])
+                fh.write('\n'.join(['#!' + util.which('bash'),
+                                    '# Concatenate an input file and a string argument to an output file.',
+                                    '# Mock a utility with the tested syntax.',
+                                    '#     clicommand.sh "some words" -i inputfile -o outputfile',
+                                    'echo $1 | cat $3 - > $5\n']))
             os.chmod(scriptname, stat.S_IRWXU)
 
             line1 = 'first line'
             filewriter1 = commandline_operation(scriptname,
+                                                arguments=[line1],
                                                 input_files={'-i': os.devnull},
                                                 output_files={'-o': file1})
 
             line2 = 'second line'
             filewriter2 = commandline_operation(scriptname,
+                                                arguments=[line2],
                                                 input_files={'-i': filewriter1.output.file['-o']},
                                                 output_files={'-o': file2})
 
