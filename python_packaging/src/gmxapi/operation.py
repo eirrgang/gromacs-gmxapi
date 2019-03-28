@@ -43,6 +43,12 @@ import functools
 import inspect
 import weakref
 
+__all__ = ['computed_result',
+           'append_list',
+           'concatenate_lists',
+           'function_wrapper',
+           'make_constant',
+           ]
 
 from gmxapi import exceptions
 
@@ -126,6 +132,35 @@ class AbstractResult(abc.ABC):
         # and may by an array of data sources that will be scattered to consumers.
         return type(None)
 
+    # def _subscribe(self, subscriber):
+    #     """Register interest in being provided with the result data when it is available.
+    #
+    #     I don't think this is quite what we want. We want the consumer to register its interest
+    #     through the resource management of the subscriber's Context, which can negotiate with
+    #     the context of this object, probably by getting a Director from it.
+    #     """
+    #     pass
+    #
+    # @classmethod
+    # def _director(self, input, context):
+    #     """Get an operation director appropriate for the input and context."""
+    #     director = None
+    #     return director
+
+# class ValidateResult(type):
+#     """Metaclass for validating the Result interface.
+#
+#     Alternative to inheriting from AbstractResult.
+#     """
+#     def __new__(meta, name, bases, class_dict):
+#         if not 'result' in class_dict or not callable(class_dict['result']):
+#             message = "{} does not provide a callable 'result' attribute, required by the Result interface.".format(name)
+#             raise exceptions.ApiError(message)
+#         if not 'dtype' in class_dict or not isinstance(class_dict['dtype'], type):
+#             message = "{} does not provide a 'dtype' attribute, required by the Result interface.".format(name)
+#             raise exceptions.ApiError(message)
+#         cls = type.__new__(meta, name, bases, class_dict)
+#         return cls
 
 # Result scenarios:
 # In (rough) order of increasing complexity:
@@ -376,7 +411,7 @@ def function_wrapper(output=None):
             if proxy is None:
                 # Access through class attribute of owner class
                 return self
-            return proxy._instance.future(self.name, self.dtype)
+            return proxy._instance.future(name=self.name, dtype=self.dtype)
 
     class OutputDataProxy(DataProxyBase):
         """Handler for read access to the `output` member of an operation handle.
@@ -451,6 +486,7 @@ def function_wrapper(output=None):
             # so we only stash the inputs and dependency information for a single set of resources.
             # TODO: validate input_fingerprint as its interface becomes clear.
             self._input_fingerprint = input_fingerprint
+            self.__cached_input = None
 
             self._data = {name: Output(name=name, dtype=dtype, done=False, data=None) for name, dtype in output.items()}
 
@@ -518,9 +554,40 @@ def function_wrapper(output=None):
             It is left as an implementation detail whether the context manager is reusable and
             under what circumstances one may be obtained.
             """
-            # TODO: Localize data
+            # Localize data
+            # TODO: (FR3) take action only if outputs are not already done.
+            # TODO: (FR3) make sure this gets run if outputs need to be satisfied for `result()`
+            for dependency in self._dependencies:
+                dependency()
+            args = []
+            try:
+                for arg in self._input_fingerprint.args:
+                    # TODO: (FR3+) be more rigorous.
+                    #  This should probably also use a sort of Context-based pub-sub rather than
+                    #  the result() method, which is explicitly for moving data across the API boundary.
+                    if hasattr(arg, 'result'):
+                        args.append(arg.result())
+                    else:
+                        args.append(arg)
+            except Exception as E:
+                raise exceptions.ApiError('input_fingerprint not iterating on "args" attr as expected.') from E
+
+            kwargs = {}
+            try:
+                for key, value in self._input_fingerprint.kwargs.items():
+                    if hasattr(value, 'result'):
+                        kwargs[key] = value.result()
+                    else:
+                        kwargs[key] = value
+            except Exception as E:
+                raise exceptions.ApiError('input_fingerprint not iterating on "kwargs" attr as expected.') from E
+
+            assert 'input' not in kwargs
+
+            input_pack = collections.namedtuple('InputPack', ('args', 'kwargs'))(args, kwargs)
+
             # Prepare input data structure
-            yield self._input_fingerprint
+            yield input_pack
 
         def publishing_resources(self):
             """Get a context manager for resolving the data dependencies of this node.
@@ -540,14 +607,16 @@ def function_wrapper(output=None):
 
         @property
         def _dependencies(self):
+            """Generate a sequence of call-backs that notify of the need to satisfy dependencies."""
             for arg in self._input_fingerprint.args:
                 if hasattr(arg, 'result') and callable(arg.result):
-                    yield arg
+                    yield arg.result
             for _, arg in self._input_fingerprint.kwargs.items():
                 if hasattr(arg, 'result') and callable(arg.result):
-                    yield arg
+                    yield arg.result
             for item in self._input_fingerprint.dependencies:
-                yield item
+                assert hasattr(item, 'run')
+                yield item.run
 
 
     def decorator(function):
@@ -679,39 +748,14 @@ def function_wrapper(output=None):
                     fault tolerance, implementations that require multiple iterations / triggers
                     to complete, or looping operations.
                     """
-                    # TODO: (FR3) take action only if outputs are not already done.
-                    # TODO: (FR3) make sure this gets run if outputs need to be satisfied for `result()`
-                    # for dependency in self.__resource_manager._dependencies:
-                    #     dependency.run()
-                    args = []
-                    try:
-                        for arg in self.__resource_manager._input_fingerprint.args:
-                            # TODO: (FR3+) be more rigorous.
-                            #  This should probably also use a sort of Context-based pub-sub rather than
-                            #  the result() method, which is explicitly for moving data across the API boundary.
-                            if hasattr(arg, 'result'):
-                                args.append(arg.result())
-                            else:
-                                args.append(arg)
-                    except Exception as E:
-                        raise exceptions.ApiError('input_fingerprint not iterating on "args" attr as expected.') from E
-
-                    kwargs = {}
-                    try:
-                        for key, value in self.__resource_manager._input_fingerprint.kwargs.items():
-                            if hasattr(value, 'result'):
-                                kwargs[key] = value.result()
-                            else:
-                                kwargs[key] = value
-                    except Exception as E:
-                        raise exceptions.ApiError('input_fingerprint not iterating on "kwargs" attr as expected.') from E
-
-                    assert 'input' not in kwargs
-                    # TODO: Allow both structured and singular output.
-                    #  For simple functions, just capture and publish the return value.
-                    with self.__resource_manager.local_input() as input:
-                        with self.__resource_manager.publishing_resources() as output:
-                            function(*input.args, output=output, **input.kwargs)
+                    if not self.__resource_manager.done:
+                        with self.__resource_manager.local_input() as input:
+                            # Note: Resources are marked "done" by the resource manager
+                            # when the following context manager completes.
+                            # TODO: Allow both structured and singular output.
+                            #  For simple functions, just capture and publish the return value.
+                            with self.__resource_manager.publishing_resources() as output:
+                                function(*input.args, output=output, **input.kwargs)
 
             operation = Operation(*args, **kwargs)
             return operation
@@ -719,3 +763,23 @@ def function_wrapper(output=None):
         return new_helper
 
     return decorator
+
+
+def generic_function(function):
+    """Create a prototype for an operation with incompletely specified inputs and outputs.
+
+    Extend function_wrapper to allow modification to the generated factory.
+
+    Wrap a generic function to produce a partially specified Operation. Product can be
+    converted to a fully specified operation by
+
+    A fully-specified Operation has all inputs named and typed so that data flow constraints
+    are clear.
+
+    Create new fused operations by adding output methods to the factory.
+
+    Note that the factory produces a fundamentally different Operation if modified between
+    uses.
+
+    TODO: Consider merging with function_wrapper() or otherwise restructuring.
+    """

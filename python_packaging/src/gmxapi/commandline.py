@@ -208,7 +208,7 @@ def filemap_to_flag_list(filemap=None):
 # in runtime implementation functions, but we can discourage it for the moment and
 # in the future we can check the current Context whenever getting a new operation
 # handle to decide if it is allowed. Such a check could only be performed after the work is launched, of course.
-def commandline_operation(executable=None, arguments=(), input_files=None, output_files=None, **kwargs):
+def commandline_operation(executable=None, arguments=(), input_files:dict=None, output_files:dict=None):
     """Helper function to define a new operation that executes a subprocess in gmxapi data flow.
 
     Define a new Operation for a particular executable and input/output parameter set.
@@ -253,13 +253,21 @@ def commandline_operation(executable=None, arguments=(), input_files=None, outpu
     # will not be published until the rest of the operation has run (i.e. the cli() executable.)
 
     @function_wrapper(output={'erroroutput': str, 'returncode': int, 'file': dict})
-    def merged_ops(erroroutput=None, returncode=None, file=None, output=None):
+    def merged_ops(erroroutput:str=None, returncode:int=None, file:dict=None, output=None):
+        assert erroroutput is not None
+        assert returncode is not None
+        assert file is not None
+        assert output is not None
         output.file = file
         output.returncode = returncode
         output.erroroutput = erroroutput
 
     # 2. Prepare data flow.
 
+    if input_files is None:
+        input_files = {}
+    if output_files is None:
+        output_files = {}
     command = concatenate_lists([[executable],
                                  arguments,
                                  filemap_to_flag_list(input_files),
@@ -267,7 +275,6 @@ def commandline_operation(executable=None, arguments=(), input_files=None, outpu
     shell = make_constant(False)
     cli_args = {'command': command,
                 'shell': shell}
-    cli_args.update(kwargs)
 
     # Note: Without a `label` argument, repeated calls to cli(**cli_args) should produce references to the same unique resource.
     # Creating this handle separately should not be necessary, but we've got a way to go until we have the
