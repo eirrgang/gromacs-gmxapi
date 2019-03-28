@@ -208,7 +208,7 @@ def filemap_to_flag_list(filemap=None):
 # in runtime implementation functions, but we can discourage it for the moment and
 # in the future we can check the current Context whenever getting a new operation
 # handle to decide if it is allowed. Such a check could only be performed after the work is launched, of course.
-def commandline_operation(executable=None, arguments=(), input_files:dict=None, output_files:dict=None):
+def commandline_operation(executable=None, arguments=(), input_files:dict=None, output_files:dict=None, **kwargs):
     """Helper function to define a new operation that executes a subprocess in gmxapi data flow.
 
     Define a new Operation for a particular executable and input/output parameter set.
@@ -275,6 +275,7 @@ def commandline_operation(executable=None, arguments=(), input_files:dict=None, 
     shell = make_constant(False)
     cli_args = {'command': command,
                 'shell': shell}
+    cli_args.update(**kwargs)
 
     # Note: Without a `label` argument, repeated calls to cli(**cli_args) should produce references to the same unique resource.
     # Creating this handle separately should not be necessary, but we've got a way to go until we have the
@@ -282,7 +283,8 @@ def commandline_operation(executable=None, arguments=(), input_files:dict=None, 
     cli_result = cli(**cli_args)
     merged_result = merged_ops(erroroutput=cli_result.output.erroroutput,
                                returncode=cli_result.output.returncode,
-                               file=output_files)
+                               file=output_files,
+                               **kwargs)
 
     # Return an object with an OutputCollection granting access to outputs of cli() and of
     # output_files (as "file")

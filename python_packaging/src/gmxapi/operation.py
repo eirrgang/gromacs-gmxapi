@@ -324,7 +324,7 @@ def function_wrapper(output=None):
     # created by the returned decorator.
 
     # Encapsulate the description of the input data flow.
-    Input = collections.namedtuple('Input', ('args', 'kwargs', 'dependencies'))
+    PyFuncInput = collections.namedtuple('Input', ('args', 'kwargs', 'dependencies'))
 
     # Encapsulate the description of a data output.
     Output = collections.namedtuple('Output', ('name', 'dtype', 'done', 'data'))
@@ -525,7 +525,14 @@ def function_wrapper(output=None):
                 self.__operation_entrance_counter += 1
                 if self.__operation_entrance_counter > 1:
                     raise exceptions.ProtocolError('Bug detected: resource manager tried to execute operation twice.')
-                self._runner()
+                if not self.done:
+                    with self.local_input() as input:
+                        # Note: Resources are marked "done" by the resource manager
+                        # when the following context manager completes.
+                        # TODO: Allow both structured and singular output.
+                        #  For simple functions, just capture and publish the return value.
+                        with self.publishing_resources() as output:
+                            self._runner(*input.args, output=output, **input.kwargs)
 
         def future(self, name:str=None, dtype=None):
             """Retrieve a Future for a named output.
@@ -630,7 +637,7 @@ def function_wrapper(output=None):
                 between the facet of the Context-level resource manager to which the Operation has access
                 and the whole of the managed resources.
                 """
-                return ResourceManager(input_fingerprint=instance._input, runner=instance.run)
+                return ResourceManager(input_fingerprint=instance._input, runner=function)
 
             class Operation(object):
                 """Dynamically defined Operation implementation.
@@ -687,9 +694,16 @@ def function_wrapper(output=None):
                                     input_kwargs[key] = value
                     assert 'input' not in kwargs
                     assert 'input' not in input_kwargs
-                    input_kwargs = {key: value for key, value in kwargs.items()}
 
-                    self.__input = Input(args=input_args,
+                    sig = inspect.signature(function)
+
+                    for key in kwargs:
+                        if key in sig.parameters:
+                            input_kwargs[key] = kwargs[key]
+                        else:
+                            raise exceptions.UsageError('Unexpected keyword argument: {}'.format(key))
+
+                    self.__input = PyFuncInput(args=input_args,
                                          kwargs=input_kwargs,
                                          dependencies=input_dependencies)
                     ##
@@ -748,14 +762,7 @@ def function_wrapper(output=None):
                     fault tolerance, implementations that require multiple iterations / triggers
                     to complete, or looping operations.
                     """
-                    if not self.__resource_manager.done:
-                        with self.__resource_manager.local_input() as input:
-                            # Note: Resources are marked "done" by the resource manager
-                            # when the following context manager completes.
-                            # TODO: Allow both structured and singular output.
-                            #  For simple functions, just capture and publish the return value.
-                            with self.__resource_manager.publishing_resources() as output:
-                                function(*input.args, output=output, **input.kwargs)
+                    self.__resource_manager.update_output()
 
             operation = Operation(*args, **kwargs)
             return operation
