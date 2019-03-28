@@ -186,6 +186,9 @@ class ImmediateResult(AbstractResult):
     def __init__(self, implementation, input):
         """`implementation` is idempotent and may be called repeatedly without (additional) side effects."""
         # Retain input information for introspection.
+        assert callable(implementation)
+        assert hasattr(input, 'args')
+        assert hasattr(input, 'kwargs')
         self.__input = input
         self.__cached_value = implementation(*input.args, **input.kwargs)
         # TODO: (FR4) need a utility to resolve the base type of a value that may be a proxy object.
@@ -258,16 +261,22 @@ def append_list(a:list=(), b:list=()):
     for arg in (a, b):
         if isinstance(arg, (str, bytes)):
             raise exceptions.ValueError('Input must be a pair of lists.')
-    return list(a) + list(b)
+    try:
+        list_a = list(a)
+    except TypeError:
+        list_a = list([a])
+    try:
+        list_b = list(b)
+    except TypeError:
+        list_b = list([b])
+    return list_a + list_b
 
 def concatenate_lists(sublists:list=()):
     """Trivial data flow restructuring operation to combine data sources into a single list."""
     if isinstance(sublists, (str, bytes)):
         raise exceptions.ValueError('Input must be a list of lists.')
-    if len(sublists) == 1:
-        return make_constant(sublists[0])
-    if len(sublists) == 2:
-        return append_list(sublists[0], sublists[1])
+    if len(sublists) == 0:
+        return []
     else:
         return append_list(sublists[0], concatenate_lists(sublists[1:]))
 
@@ -396,7 +405,23 @@ def function_wrapper(output=None):
             if not isinstance(dtype, type):
                 raise exceptions.ValueError('dtype argument must specify a type.')
             self.dtype = dtype
-            self.result = ResultGetter(resource_manager, name, dtype)
+            # This abstraction anticipates that a Future might not retain a strong
+            # reference to the resource_manager, but only to a facility that can resolve
+            # the result() call. Additional aspects of the Future interface can be
+            # developed without coupling to a specific concept of the resource manager.
+            self._result = ResultGetter(resource_manager, name, dtype)
+
+        def result(self):
+            return self._result()
+
+        def __getitem__(self, item):
+            """Get a more limited view on the Future."""
+            # TODO: Strict definition of outputs and output types can let us validate this earlier.
+            #  We need AssociativeArray and NDArray so that we can type the elements. Allowing a
+            #  Future with None type is a hack.
+            result = lambda future=self, item=item : future.result()[item]
+            future = collections.namedtuple('Future', ('dtype', 'result'))(None, result)
+            return future
 
     class OutputDescriptor(object):
         """Read-only data descriptor for proxied output access.
@@ -499,6 +524,9 @@ def function_wrapper(output=None):
             self.__operation_entrance_counter = 0
 
         def set_result(self, name, value):
+            if type(value) == list:
+                for item in value:
+                    assert not hasattr(item, 'result')
             self._data[name] = Output(name=name,
                                       dtype=self._data[name].dtype,
                                       done=True,
@@ -543,6 +571,10 @@ def function_wrapper(output=None):
             if not isinstance(name, str) or not name in self._data:
                 raise exceptions.ValueError('"name" argument must name an output.')
             assert dtype is not None
+            if dtype != self._data[name].dtype:
+                message = 'Requested Future of type {} is not compatible with available type {}.'
+                message = message.format(dtype, self._data[name].dtype)
+                raise exceptions.ApiError(message)
             return Future(self, name, dtype)
 
         def data(self):
@@ -566,12 +598,13 @@ def function_wrapper(output=None):
             # TODO: (FR3) make sure this gets run if outputs need to be satisfied for `result()`
             for dependency in self._dependencies:
                 dependency()
+
+            # TODO: (FR3+) be more rigorous.
+            #  This should probably also use a sort of Context-based pub-sub rather than
+            #  the result() method, which is explicitly for moving data across the API boundary.
             args = []
             try:
                 for arg in self._input_fingerprint.args:
-                    # TODO: (FR3+) be more rigorous.
-                    #  This should probably also use a sort of Context-based pub-sub rather than
-                    #  the result() method, which is explicitly for moving data across the API boundary.
                     if hasattr(arg, 'result'):
                         args.append(arg.result())
                     else:
@@ -586,11 +619,33 @@ def function_wrapper(output=None):
                         kwargs[key] = value.result()
                     else:
                         kwargs[key] = value
+                    if isinstance(kwargs[key], list):
+                        new_list = []
+                        for item in kwargs[key]:
+                            if hasattr(item, 'result'):
+                                new_list.append(item.result())
+                            else:
+                                new_list.append(item)
+                        kwargs[key] = new_list
+                    try:
+                        for item in kwargs[key]:
+                            # TODO: This should not happen. Need proper tools for NDArray Futures.
+                            # assert not hasattr(item, 'result')
+                            if hasattr(item, 'result'):
+                                kwargs[key][item] = item.result()
+                    except TypeError:
+                        # This is only a test for iterables
+                        pass
             except Exception as E:
                 raise exceptions.ApiError('input_fingerprint not iterating on "kwargs" attr as expected.') from E
 
             assert 'input' not in kwargs
 
+            for key, value in kwargs.items():
+                if key == 'command':
+                    if type(value) == list:
+                        for item in value:
+                            assert not hasattr(item, 'result')
             input_pack = collections.namedtuple('InputPack', ('args', 'kwargs'))(args, kwargs)
 
             # Prepare input data structure
@@ -628,7 +683,8 @@ def function_wrapper(output=None):
 
     def decorator(function):
         @functools.wraps(function)
-        def new_helper(*args, **kwargs):
+        def factory(**kwargs):
+
             def get_resource_manager(instance):
                 """Provide a reference to a resource manager for the dynamically defined Operation.
 
@@ -644,8 +700,9 @@ def function_wrapper(output=None):
 
                 Define a gmxapi Operation for the functionality being wrapped by the enclosing code.
                 """
+                signature = inspect.signature(function)
 
-                def __init__(self, *args, **kwargs):
+                def __init__(self, **kwargs):
                     """Initialization defines the unique input requirements of a work graph node.
 
                     Initialization parameters map to the parameters of the wrapped function with
@@ -660,7 +717,6 @@ def function_wrapper(output=None):
                     executes and produces output.
                     """
                     ## Define the unique identity and data flow constraints of this work graph node.
-                    input_args = tuple(args)
                     # TODO: (FR3) generalize
                     input_dependencies = []
 
@@ -695,15 +751,16 @@ def function_wrapper(output=None):
                     assert 'input' not in kwargs
                     assert 'input' not in input_kwargs
 
-                    sig = inspect.signature(function)
-
+                    # Merge kwargs and kwargs['input'] (keyword parameters versus parameter pack)
                     for key in kwargs:
-                        if key in sig.parameters:
+                        if key in self.signature.parameters:
                             input_kwargs[key] = kwargs[key]
                         else:
                             raise exceptions.UsageError('Unexpected keyword argument: {}'.format(key))
 
-                    self.__input = PyFuncInput(args=input_args,
+                    # TODO: Check input types
+
+                    self.__input = PyFuncInput(args=[],
                                          kwargs=input_kwargs,
                                          dependencies=input_dependencies)
                     ##
@@ -764,10 +821,10 @@ def function_wrapper(output=None):
                     """
                     self.__resource_manager.update_output()
 
-            operation = Operation(*args, **kwargs)
+            operation = Operation(**kwargs)
             return operation
 
-        return new_helper
+        return factory
 
     return decorator
 

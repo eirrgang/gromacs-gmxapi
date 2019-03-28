@@ -46,7 +46,7 @@ import subprocess
 
 from gmxapi import exceptions
 from gmxapi import logging
-from gmxapi.operation import function_wrapper, concatenate_lists, make_constant
+from gmxapi.operation import function_wrapper, append_list, concatenate_lists, make_constant
 from gmxapi import util
 
 # Module-level logger
