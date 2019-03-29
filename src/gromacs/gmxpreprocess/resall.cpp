@@ -376,7 +376,7 @@ void readResidueDatabase(const std::string &rrdb, std::vector<PreprocessResidue>
         print_resall_header(stderr, gmx::arrayRefFromArray(&header_settings, 1));
     }
     /* We don't know the current size of rrtp, but simply realloc immediately */
-    auto oldArrayEnd = rtpDBEntry->end() - 1;
+    auto oldArrayEnd = rtpDBEntry->end();
     while (!feof(in))
     {
         /* Initialise rtp entry structure */
@@ -433,7 +433,7 @@ void readResidueDatabase(const std::string &rrdb, std::vector<PreprocessResidue>
 
         auto found = std::find_if(rtpDBEntry->begin(), rtpDBEntry->end()-1,
                                   [&res](const PreprocessResidue &entry)
-                                  { return gmx::equalCaseInsensitive(res->resname, entry.resname); });
+                                  { return gmx::equalCaseInsensitive(entry.resname, res->resname); });
 
         if (found == rtpDBEntry->end() - 1)
         {

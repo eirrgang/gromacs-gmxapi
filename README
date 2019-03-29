@@ -1,19 +1,34 @@
+This is an unofficial version of GROMACS. Please do not use it for
+production simulation work. It exists to show a working prototype from
+which the GROMACS team expects to extract code useful for implementing
+functionality in future major releases of GROMACS.
 
-               Welcome to the official version of GROMACS!
+This code is contained in a git branch available from the main GROMACS
+code review server.
 
-If you are familiar with Unix, it should be fairly trivial to compile and
-install GROMACS. GROMACS uses only the CMake build sytem, and our
-installation guide can be found at
-http://manual.gromacs.org/documentation/current/install-guide/index.html
+The branch serves as the basis of a fork at
+https://github.com/kassonlab/gromacs-gmxapi
+While GROMACS Jenkins infrastructure is evolving, this fork is used
+to trigger automated continuous integration testing and Docker image
+builds via Travis-CI.
+See https://travis-ci.org/kassonlab/gromacs-gmxapi/branches
 
-Of course we will do our utmost to help you with any problems, but PLEASE 
-READ THE INSTALLATION INSTRUCTIONS BEFORE CONTACTING US!
+The branch provides context for reviewers and simpilifies developement
+as Python functionality is staged into the GROMACS repository.
 
-There are also several other online resources available from the homepage, 
-and special information for developers.
+The GitHub repository has feature-development branches from which Gerrit
+changes are intended to be extracted. Gerrit patch sets should be
+equivalent to the `diff` applied by the feature branch to its fork point
+on this branch.
 
-If you are a developer, or change the source for any other reason, check
-out http://www.gromacs.org/Developer_Zone.
+When the functionality is integrated, then this branch will no longer
+be useful and will be removed from the gerrit server.  If there is no
+activity in twelve months, then the core GROMACS team will deem it
+inactive and remove it.
+
+As code is integrated into master branch, the content of this branch
+will be updated so that the next chunk to be staged into master can
+be reviewed in the appropriate context.
 
                                * * * * *
 

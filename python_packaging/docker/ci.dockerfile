@@ -37,7 +37,8 @@ RUN apt-get update && \
         python3-venv && \
     rm -rf /var/lib/apt/lists/*
 
-# TODO: use pyenv for multiple Python installations for explicit version coverage.
+# TODO: Use non-system Python installations for explicit version coverage.
+# Consider pyenv for generic management of Python environment.
 
 ENV CMAKE_ROOT /usr/local/cmake
 ENV PATH $CMAKE_ROOT/bin:$PATH
@@ -49,8 +50,7 @@ USER testing
 # TODO: Clean up pip cache.
 RUN python3 -m venv $HOME/testing
 RUN . $HOME/testing/bin/activate && \
-    pip install --upgrade pip setuptools && \
-    pip install jupyter
+    pip install --upgrade pip setuptools
 
 ADD --chown=testing:testing requirements-test.txt /home/testing/gmxapi/
 

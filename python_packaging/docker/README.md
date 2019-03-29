@@ -27,10 +27,12 @@ For `gromacs-dependencies`, the build context doesn't matter. Just use `.` in th
     # optional:
     docker tag gmxapi/gromacs-dependencies-mpich gmxapi/gromacs-dependencies-mpich:${FORKPOINT}
 
-This should rarely be necessary, and the dependent images can pull the `latest`
+This should rarely be necessary, and the dependent images can probably just pull the `latest`
 from dockerhub.
 
 For `gromacs`, the build context needs to be the root of the GROMACS repository (`../..`).
+In case images for feature branches diverge too much or become tightly coupled to particular revisions in `master`,
+it may be useful to tag this image to annotate the GROMACS build.
 
     # Use DOCKER_CORES to let `make` use all cores available to the Docker engine.
     # optionally include an additional `--build-arg REF=${FORKPOINT}`
@@ -39,6 +41,7 @@ For `gromacs`, the build context needs to be the root of the GROMACS repository 
     docker tag gmxapi/gromacs-mpich gmxapi/gromacs-mpich:${FORKPOINT}
 
 For integration testing here, we only want the `python_packaging` subdirectory (`..`).
+The image should be tagged according to the functionality it is intended to demonstrate.
 
     docker build -t gmxapi/ci-mpich:${TAG} --build-arg REF=${FORKPOINT} -f ci.dockerfile ..
 
@@ -72,6 +75,8 @@ To be able to step through with gdb, run with something like the following, repl
     docker run --rm -ti --security-opt seccomp=unconfined imagename bash
 
 ## Automation
+
+*TODO: Update this section as Jenkins infrastructure evolves.*
 
 Travis-CI builds and pushes a chain of Docker images to the `gmxapi` dockerhub organization.
 The `kassonlab` GitHub organization `gromacs-gmxapi` repository branches that are descended from the `kassonLabFork`

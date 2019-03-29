@@ -1,7 +1,7 @@
 /*
  * This file is part of the GROMACS molecular simulation package.
  *
- * Copyright (c) 2018, by the GROMACS development team, led by
+ * Copyright (c) 2018,2019, by the GROMACS development team, led by
  * Mark Abraham, David van der Spoel, Berk Hess, and Erik Lindahl,
  * and including many others, as listed in the AUTHORS file in the
  * top-level source directory and at http://www.gromacs.org.
@@ -33,30 +33,30 @@
  * the research papers on the package. Check out http://www.gromacs.org.
  */
 
-/*! \libinternal \file
- * \brief Provides utility functions for MiMiC QM/MM
- * \inlibraryapi
- *
- * \author Viacheslav Bolnykh <v.bolnykh@hpc-leap.eu>
- * \ingroup module_mimic
- */
-#ifndef GMX_MIMIC_MIMICUTILS_H
-#define GMX_MIMIC_MIMICUTILS_H
+#include "gmxpre.h"
 
-#include <vector>
+#include "utilities.h"
 
-#include "gromacs/gmxpreprocess/toppush.h"
-#include "gromacs/topology/block.h"
 #include "gromacs/topology/topology.h"
 
-/*! \brief Generates the list of QM atoms
- *
- * This function generates vector containing global IDs of QM atoms
- * based on the information stored in the QM/MM group (egcQMMM)
- *
- * \param[in]    mtop   Global topology object
- * \return              The list of global IDs of QM atoms
- */
-std::vector<int> genQmmmIndices(const gmx_mtop_t &mtop);
-
-#endif //GMX_MIMIC_MIMICUTILS_H
+std::vector<int> genQmmmIndices(const gmx_mtop_t &mtop)
+{
+    std::vector<int> output;
+    int              global_at = 0;
+    unsigned char   *grpnr     = mtop.groups.grpnr[egcQMMM];
+    for (const gmx_molblock_t &molb : mtop.molblock)
+    {
+        for (int mol = 0; mol < molb.nmol; ++mol)
+        {
+            for (int n_atom = 0; n_atom < mtop.moltype[molb.type].atoms.nr; ++n_atom)
+            {
+                if (!grpnr || !grpnr[global_at])
+                {
+                    output.push_back(global_at);
+                }
+                ++global_at;
+            }
+        }
+    }
+    return output;
+}
