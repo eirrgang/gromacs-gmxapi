@@ -36,8 +36,6 @@
  */
 #include "gmxpre.h"
 
-#include "sim_util.h"
-
 #include "config.h"
 
 #include <cmath>
@@ -331,7 +329,7 @@ static void do_nb_verlet(t_forcerec                       *fr,
         /* When dynamic pair-list  pruning is requested, we need to prune
          * at nstlistPrune steps.
          */
-        if (nbv->pairlistSets().isDynamicPruningStepCpu(step))
+        if (nbv->isDynamicPruningStepCpu(step))
         {
             /* Prune the pair-list beyond fr->ic->rlistPrune using
              * the current coordinates of the atoms.
@@ -350,11 +348,6 @@ static void do_nb_verlet(t_forcerec                       *fr,
     {
         wallcycle_sub_stop(wcycle, ewcsNONBONDED);
     }
-}
-
-gmx_bool use_GPU(const nonbonded_verlet_t *nbv)
-{
-    return nbv != nullptr && nbv->useGpu();
 }
 
 static inline void clear_rvecs_omp(int n, rvec v[])
@@ -702,7 +695,7 @@ static void alternatePmeNbGpuWaitReduce(nonbonded_verlet_t                  *nbv
     }
 }
 
-/*! \brief Hack structure with force ouput buffers for do_force */
+/*! \brief Hack structure with force ouput buffers for do_force for the home atoms for this domain */
 struct ForceOutputs
 {
     //! Constructor
@@ -710,9 +703,9 @@ struct ForceOutputs
         f(f),
         forceWithVirial(forceWithVirial) {}
 
-    //! Force output buffer used by legacy modules
+    //! Force output buffer used by legacy modules (without SIMD padding)
     rvec                 *const f;
-    //! Force with direct virial contribution (if there are any)
+    //! Force with direct virial contribution (if there are any; without SIMD padding)
     gmx::ForceWithVirial        forceWithVirial;
 };
 
@@ -833,12 +826,10 @@ static void do_force_cutsVERLET(FILE *fplog,
                                 const int flags,
                                 const DDBalanceRegionHandler &ddBalanceRegionHandler)
 {
-    int                 cg1, i, j;
+    int                 i, j;
     double              mu[2*DIM];
     gmx_bool            bStateChanged, bNS, bFillGrid, bCalcCGCM;
     gmx_bool            bDoForces, bUseGPU, bUseOrEmulGPU;
-    rvec                vzero, box_diag;
-    float               cycles_pme, cycles_wait_gpu;
     nonbonded_verlet_t *nbv = fr->nbv.get();
 
     bStateChanged = ((flags & GMX_FORCE_STATECHANGED) != 0);
@@ -867,25 +858,10 @@ static void do_force_cutsVERLET(FILE *fplog,
         ddBalanceRegionHandler.openBeforeForceComputationCpu(DdAllowBalanceRegionReopen::yes);
     }
 
-    cycles_wait_gpu = 0;
-
     const int start  = 0;
     const int homenr = mdatoms->homenr;
 
     clear_mat(vir_force);
-
-    if (DOMAINDECOMP(cr))
-    {
-        cg1 = cr->dd->globalAtomGroupIndices.size();
-    }
-    else
-    {
-        cg1 = top->cgs.nr;
-    }
-    if (fr->n_tpi > 0)
-    {
-        cg1--;
-    }
 
     if (bStateChanged)
     {
@@ -914,7 +890,7 @@ static void do_force_cutsVERLET(FILE *fplog,
 
         if (bCalcCGCM)
         {
-            put_atoms_in_box_omp(fr->ePBC, box, x.unpaddedArrayRef().subArray(0, homenr));
+            put_atoms_in_box_omp(fr->ePBC, box, x.unpaddedArrayRef().subArray(0, homenr), gmx_omp_nthreads_get(emntDefault));
             inc_nrnb(nrnb, eNR_SHIFTX, homenr);
         }
         else if (EI_ENERGY_MINIMIZATION(inputrec->eI) && graph)
@@ -955,7 +931,14 @@ static void do_force_cutsVERLET(FILE *fplog,
             mk_mshift(fplog, graph, fr->ePBC, box, as_rvec_array(x.unpaddedArrayRef().data()));
         }
 
+        // TODO
+        // - vzero is constant, do we need to pass it?
+        // - box_diag should be passed directly to nbnxn_put_on_grid
+        //
+        rvec vzero;
         clear_rvec(vzero);
+
+        rvec box_diag;
         box_diag[XX] = box[XX][XX];
         box_diag[YY] = box[YY][YY];
         box_diag[ZZ] = box[ZZ][ZZ];
@@ -979,7 +962,7 @@ static void do_force_cutsVERLET(FILE *fplog,
             wallcycle_sub_stop(wcycle, ewcsNBS_GRID_NONLOCAL);
         }
 
-        nbnxn_atomdata_set(nbv->nbat.get(), nbv->nbs.get(), mdatoms, fr->cginfo);
+        nbv->setAtomProperties(*mdatoms, *fr->cginfo);
 
         wallcycle_stop(wcycle, ewcNS);
 
@@ -1002,13 +985,12 @@ static void do_force_cutsVERLET(FILE *fplog,
                 // TODO the xq, f, and fshift buffers are now shared
                 // resources, so they should be maintained by a
                 // higher-level object than the nb module.
-                fr->gpuBonded->updateInteractionListsAndDeviceBuffers(nbnxn_get_gridindices(fr->nbv->nbs.get()),
+                fr->gpuBonded->updateInteractionListsAndDeviceBuffers(nbv->getGridIndices(),
                                                                       top->idef,
                                                                       Nbnxm::gpu_get_xq(nbv->gpu_nbv),
                                                                       Nbnxm::gpu_get_f(nbv->gpu_nbv),
                                                                       Nbnxm::gpu_get_fshift(nbv->gpu_nbv));
             }
-
             wallcycle_stop(wcycle, ewcLAUNCH_GPU);
         }
 
@@ -1037,9 +1019,8 @@ static void do_force_cutsVERLET(FILE *fplog,
     }
     else
     {
-        nbnxn_atomdata_copy_x_to_nbat_x(nbv->nbs.get(), Nbnxm::AtomLocality::Local,
-                                        FALSE, as_rvec_array(x.unpaddedArrayRef().data()),
-                                        nbv->nbat.get(), wcycle);
+        nbv->setCoordinates(Nbnxm::AtomLocality::Local, false,
+                            x.unpaddedArrayRef(), wcycle);
     }
 
     if (bUseGPU)
@@ -1100,9 +1081,8 @@ static void do_force_cutsVERLET(FILE *fplog,
         {
             dd_move_x(cr->dd, box, x.unpaddedArrayRef(), wcycle);
 
-            nbnxn_atomdata_copy_x_to_nbat_x(nbv->nbs.get(), Nbnxm::AtomLocality::NonLocal,
-                                            FALSE, as_rvec_array(x.unpaddedArrayRef().data()),
-                                            nbv->nbat.get(), wcycle);
+            nbv->setCoordinates(Nbnxm::AtomLocality::NonLocal, false,
+                                x.unpaddedArrayRef(), wcycle);
         }
 
         if (bUseGPU)
@@ -1286,7 +1266,7 @@ static void do_force_cutsVERLET(FILE *fplog,
                       as_rvec_array(x.unpaddedArrayRef().data()), hist, forceOut.f, &forceOut.forceWithVirial, enerd, fcd,
                       box, inputrec->fepvals, lambda, graph, &(top->excls), fr->mu_tot,
                       flags,
-                      &cycles_pme, ddBalanceRegionHandler);
+                      ddBalanceRegionHandler);
 
     wallcycle_stop(wcycle, ewcFORCE);
 
@@ -1296,6 +1276,9 @@ static void do_force_cutsVERLET(FILE *fplog,
                          flags, &forceOut.forceWithVirial, enerd,
                          ed, bNS);
 
+    // Will store the amount of cycles spent waiting for the GPU that
+    // will be later used in the DLB accounting.
+    float cycles_wait_gpu = 0;
     if (bUseOrEmulGPU)
     {
         /* wait for non-local forces (or calculate in emulation mode) */
@@ -1410,7 +1393,7 @@ static void do_force_cutsVERLET(FILE *fplog,
         wallcycle_sub_start_nocount(wcycle, ewcsLAUNCH_GPU_NONBONDED);
         Nbnxm::gpu_clear_outputs(nbv->gpu_nbv, flags);
 
-        if (nbv->pairlistSets().isDynamicPruningStepGpu(step))
+        if (nbv->isDynamicPruningStepGpu(step))
         {
             nbv->dispatchPruneKernelGpu(step);
         }
@@ -1525,7 +1508,6 @@ static void do_force_cutsGROUP(FILE *fplog,
     double     mu[2*DIM];
     gmx_bool   bStateChanged, bNS, bFillGrid, bCalcCGCM;
     gmx_bool   bDoForces;
-    float      cycles_pme;
 
     const int  start  = 0;
     const int  homenr = mdatoms->homenr;
@@ -1719,7 +1701,7 @@ static void do_force_cutsGROUP(FILE *fplog,
                       box, inputrec->fepvals, lambda,
                       graph, &(top->excls), fr->mu_tot,
                       flags,
-                      &cycles_pme, ddBalanceRegionHandler);
+                      ddBalanceRegionHandler);
 
     wallcycle_stop(wcycle, ewcFORCE);
 
@@ -1884,188 +1866,4 @@ void do_force(FILE                                     *fplog,
      * the balance timing, which is ok as most tasks do communication.
      */
     ddBalanceRegionHandler.openBeforeForceComputationCpu(DdAllowBalanceRegionReopen::no);
-}
-
-
-void do_constrain_first(FILE *fplog, gmx::Constraints *constr,
-                        const t_inputrec *ir, const t_mdatoms *md,
-                        t_state *state)
-{
-    int             i, m, start, end;
-    int64_t         step;
-    real            dt = ir->delta_t;
-    real            dvdl_dum;
-    rvec           *savex;
-
-    /* We need to allocate one element extra, since we might use
-     * (unaligned) 4-wide SIMD loads to access rvec entries.
-     */
-    snew(savex, state->natoms + 1);
-
-    start = 0;
-    end   = md->homenr;
-
-    if (debug)
-    {
-        fprintf(debug, "vcm: start=%d, homenr=%d, end=%d\n",
-                start, md->homenr, end);
-    }
-    /* Do a first constrain to reset particles... */
-    step = ir->init_step;
-    if (fplog)
-    {
-        char buf[STEPSTRSIZE];
-        fprintf(fplog, "\nConstraining the starting coordinates (step %s)\n",
-                gmx_step_str(step, buf));
-    }
-    dvdl_dum = 0;
-
-    /* constrain the current position */
-    constr->apply(TRUE, FALSE,
-                  step, 0, 1.0,
-                  state->x.rvec_array(), state->x.rvec_array(), nullptr,
-                  state->box,
-                  state->lambda[efptBONDED], &dvdl_dum,
-                  nullptr, nullptr, gmx::ConstraintVariable::Positions);
-    if (EI_VV(ir->eI))
-    {
-        /* constrain the inital velocity, and save it */
-        /* also may be useful if we need the ekin from the halfstep for velocity verlet */
-        constr->apply(TRUE, FALSE,
-                      step, 0, 1.0,
-                      state->x.rvec_array(), state->v.rvec_array(), state->v.rvec_array(),
-                      state->box,
-                      state->lambda[efptBONDED], &dvdl_dum,
-                      nullptr, nullptr, gmx::ConstraintVariable::Velocities);
-    }
-    /* constrain the inital velocities at t-dt/2 */
-    if (EI_STATE_VELOCITY(ir->eI) && ir->eI != eiVV)
-    {
-        auto x = makeArrayRef(state->x).subArray(start, end);
-        auto v = makeArrayRef(state->v).subArray(start, end);
-        for (i = start; (i < end); i++)
-        {
-            for (m = 0; (m < DIM); m++)
-            {
-                /* Reverse the velocity */
-                v[i][m] = -v[i][m];
-                /* Store the position at t-dt in buf */
-                savex[i][m] = x[i][m] + dt*v[i][m];
-            }
-        }
-        /* Shake the positions at t=-dt with the positions at t=0
-         * as reference coordinates.
-         */
-        if (fplog)
-        {
-            char buf[STEPSTRSIZE];
-            fprintf(fplog, "\nConstraining the coordinates at t0-dt (step %s)\n",
-                    gmx_step_str(step, buf));
-        }
-        dvdl_dum = 0;
-        constr->apply(TRUE, FALSE,
-                      step, -1, 1.0,
-                      state->x.rvec_array(), savex, nullptr,
-                      state->box,
-                      state->lambda[efptBONDED], &dvdl_dum,
-                      state->v.rvec_array(), nullptr, gmx::ConstraintVariable::Positions);
-
-        for (i = start; i < end; i++)
-        {
-            for (m = 0; m < DIM; m++)
-            {
-                /* Re-reverse the velocities */
-                v[i][m] = -v[i][m];
-            }
-        }
-    }
-    sfree(savex);
-}
-
-void put_atoms_in_box_omp(int ePBC, const matrix box, gmx::ArrayRef<gmx::RVec> x)
-{
-    int t, nth;
-    nth = gmx_omp_nthreads_get(emntDefault);
-
-#pragma omp parallel for num_threads(nth) schedule(static)
-    for (t = 0; t < nth; t++)
-    {
-        try
-        {
-            size_t natoms = x.size();
-            size_t offset = (natoms*t    )/nth;
-            size_t len    = (natoms*(t + 1))/nth - offset;
-            put_atoms_in_box(ePBC, box, x.subArray(offset, len));
-        }
-        GMX_CATCH_ALL_AND_EXIT_WITH_FATAL_ERROR;
-    }
-}
-
-void initialize_lambdas(FILE               *fplog,
-                        const t_inputrec   &ir,
-                        bool                isMaster,
-                        int                *fep_state,
-                        gmx::ArrayRef<real> lambda,
-                        double             *lam0)
-{
-    /* TODO: Clean up initialization of fep_state and lambda in
-       t_state.  This function works, but could probably use a logic
-       rewrite to keep all the different types of efep straight. */
-
-    if ((ir.efep == efepNO) && (!ir.bSimTemp))
-    {
-        return;
-    }
-
-    const t_lambda *fep = ir.fepvals;
-    if (isMaster)
-    {
-        *fep_state = fep->init_fep_state; /* this might overwrite the checkpoint
-                                             if checkpoint is set -- a kludge is in for now
-                                             to prevent this.*/
-    }
-
-    for (int i = 0; i < efptNR; i++)
-    {
-        double thisLambda;
-        /* overwrite lambda state with init_lambda for now for backwards compatibility */
-        if (fep->init_lambda >= 0) /* if it's -1, it was never initialized */
-        {
-            thisLambda = fep->init_lambda;
-        }
-        else
-        {
-            thisLambda = fep->all_lambda[i][fep->init_fep_state];
-        }
-        if (isMaster)
-        {
-            lambda[i] = thisLambda;
-        }
-        if (lam0 != nullptr)
-        {
-            lam0[i] = thisLambda;
-        }
-    }
-    if (ir.bSimTemp)
-    {
-        /* need to rescale control temperatures to match current state */
-        for (int i = 0; i < ir.opts.ngtc; i++)
-        {
-            if (ir.opts.ref_t[i] > 0)
-            {
-                ir.opts.ref_t[i] = ir.simtempvals->temperatures[fep->init_fep_state];
-            }
-        }
-    }
-
-    /* Send to the log the information on the current lambdas */
-    if (fplog != nullptr)
-    {
-        fprintf(fplog, "Initial vector of lambda components:[ ");
-        for (const auto &l : lambda)
-        {
-            fprintf(fplog, "%10.4f ", l);
-        }
-        fprintf(fplog, "]\n");
-    }
 }

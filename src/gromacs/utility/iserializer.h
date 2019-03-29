@@ -1,7 +1,7 @@
 /*
  * This file is part of the GROMACS molecular simulation package.
  *
- * Copyright (c) 2016,2017,2018, by the GROMACS development team, led by
+ * Copyright (c) 2016,2017,2018,2019, by the GROMACS development team, led by
  * Mark Abraham, David van der Spoel, Berk Hess, and Erik Lindahl,
  * and including many others, as listed in the AUTHORS file in the
  * top-level source directory and at http://www.gromacs.org.
@@ -36,6 +36,9 @@
  * \brief
  * Declares a generic serialization interface that supports both directions.
  *
+ * \todo Generalize and transfer serialization functionality used in
+ *       mrc density file header serialization to here.
+ *
  * \author Teemu Murtola <teemu.murtola@gmail.com>
  * \inlibraryapi
  * \ingroup module_utility
@@ -69,6 +72,7 @@ class ISerializer
         virtual void doBool(bool *value)           = 0;
         virtual void doUChar(unsigned char *value) = 0;
         virtual void doInt(int *value)             = 0;
+        virtual void doInt32(int32_t *value)       = 0;
         virtual void doInt64(int64_t *value)       = 0;
         virtual void doFloat(float *value)         = 0;
         virtual void doDouble(double *value)       = 0;

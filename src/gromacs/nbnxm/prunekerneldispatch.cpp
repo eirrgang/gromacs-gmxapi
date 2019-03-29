@@ -37,32 +37,40 @@
 
 #include "gromacs/mdlib/gmx_omp_nthreads.h"
 #include "gromacs/nbnxm/nbnxm.h"
-#include "gromacs/nbnxm/pairlist.h"
 #include "gromacs/utility/gmxassert.h"
 
+#include "pairlistset.h"
+#include "pairlistsets.h"
 #include "kernels_reference/kernel_ref_prune.h"
 #include "kernels_simd_2xmm/kernel_prune.h"
 #include "kernels_simd_4xm/kernel_prune.h"
 
+void
+PairlistSets::dispatchPruneKernel(const Nbnxm::InteractionLocality  iLocality,
+                                  const nbnxn_atomdata_t           *nbat,
+                                  const rvec                       *shift_vec,
+                                  const Nbnxm::KernelType           kernelType)
+{
+    pairlistSet(iLocality).dispatchPruneKernel(nbat, shift_vec, kernelType);
+}
 
 void
-nonbonded_verlet_t::PairlistSets::dispatchPruneKernel(const Nbnxm::InteractionLocality  iLocality,
-                                                      const nbnxn_atomdata_t           *nbat,
-                                                      const rvec                       *shift_vec,
-                                                      const Nbnxm::KernelType           kernelType)
+PairlistSet::dispatchPruneKernel(const nbnxn_atomdata_t  *nbat,
+                                 const rvec              *shift_vec,
+                                 const Nbnxm::KernelType  kernelType)
 {
-    nbnxn_pairlist_set_t *nbl_lists  = &pairlistSet(iLocality);
+    const real rlistInner = params_.rlistInner;
 
-    const real            rlistInner = nbl_lists->params.rlistInner;
-
-    GMX_ASSERT(nbl_lists->nbl[0]->ciOuter.size() >= nbl_lists->nbl[0]->ci.size(),
+    GMX_ASSERT(cpuLists_[0].ciOuter.size() >= cpuLists_[0].ci.size(),
                "Here we should either have an empty ci list or ciOuter should be >= ci");
 
     int gmx_unused nthreads = gmx_omp_nthreads_get(emntNonbonded);
+    GMX_ASSERT(nthreads == static_cast<gmx::index>(cpuLists_.size()),
+               "The number of threads should match the number of lists");
 #pragma omp parallel for schedule(static) num_threads(nthreads)
-    for (int i = 0; i < nbl_lists->nnbl; i++)
+    for (int i = 0; i < nthreads; i++)
     {
-        NbnxnPairlistCpu *nbl = nbl_lists->nbl[i];
+        NbnxnPairlistCpu *nbl = &cpuLists_[i];
 
         switch (kernelType)
         {
@@ -86,4 +94,13 @@ nonbonded_verlet_t::dispatchPruneKernelCpu(const Nbnxm::InteractionLocality  iLo
                                            const rvec                       *shift_vec)
 {
     pairlistSets_->dispatchPruneKernel(iLocality, nbat.get(), shift_vec, kernelSetup_.kernelType);
+}
+
+void nonbonded_verlet_t::dispatchPruneKernelGpu(int64_t step)
+{
+    const bool stepIsEven = (pairlistSets().numStepsWithPairlist(step) % 2 == 0);
+
+    Nbnxm::gpu_launch_kernel_pruneonly(gpu_nbv,
+                                       stepIsEven ? Nbnxm::InteractionLocality::Local : Nbnxm::InteractionLocality::NonLocal,
+                                       pairlistSets().params().numRollingPruningParts);
 }

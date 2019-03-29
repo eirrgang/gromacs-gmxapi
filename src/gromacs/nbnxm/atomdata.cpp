@@ -57,7 +57,6 @@
 #include "gromacs/nbnxm/pairlist.h"
 #include "gromacs/pbcutil/ishift.h"
 #include "gromacs/simd/simd.h"
-#include "gromacs/timing/wallcycle.h"
 #include "gromacs/utility/exceptions.h"
 #include "gromacs/utility/fatalerror.h"
 #include "gromacs/utility/gmxomp.h"
@@ -67,7 +66,7 @@
 #include "gromacs/utility/stringutil.h"
 
 #include "grid.h"
-#include "internal.h"
+#include "gridset.h"
 
 using namespace gmx; // TODO: Remove when this file is moved into gmx namespace
 
@@ -274,8 +273,11 @@ static void set_lj_parameter_data(nbnxn_atomdata_t::Params *params, gmx_bool bSI
             {
                 params->nbfp_aligned[(i*nt+j)*c_simdBestPairAlignment+0] = params->nbfp[(i*nt+j)*2+0];
                 params->nbfp_aligned[(i*nt+j)*c_simdBestPairAlignment+1] = params->nbfp[(i*nt+j)*2+1];
-                params->nbfp_aligned[(i*nt+j)*c_simdBestPairAlignment+2] = 0;
-                params->nbfp_aligned[(i*nt+j)*c_simdBestPairAlignment+3] = 0;
+                if (c_simdBestPairAlignment > 2)
+                {
+                    params->nbfp_aligned[(i*nt+j)*c_simdBestPairAlignment+2] = 0;
+                    params->nbfp_aligned[(i*nt+j)*c_simdBestPairAlignment+3] = 0;
+                }
             }
         }
 #endif
@@ -960,14 +962,12 @@ static void nbnxn_atomdata_set_energygroups(nbnxn_atomdata_t::Params *params,
 }
 
 /* Sets all required atom parameter data in nbnxn_atomdata_t */
-void nbnxn_atomdata_set(nbnxn_atomdata_t    *nbat,
-                        const nbnxn_search  *nbs,
-                        const t_mdatoms     *mdatoms,
-                        const int           *atinfo)
+void nbnxn_atomdata_set(nbnxn_atomdata_t     *nbat,
+                        const Nbnxm::GridSet &gridSet,
+                        const t_mdatoms      *mdatoms,
+                        const int            *atinfo)
 {
     nbnxn_atomdata_t::Params &params = nbat->paramsDeprecated();
-
-    const Nbnxm::GridSet     &gridSet = nbs->gridSet();
 
     nbnxn_atomdata_set_atomtypes(&params, gridSet, mdatoms->typeA);
 
@@ -999,20 +999,14 @@ void nbnxn_atomdata_copy_shiftvec(gmx_bool          bDynamicBox,
 }
 
 /* Copies (and reorders) the coordinates to nbnxn_atomdata_t */
-void nbnxn_atomdata_copy_x_to_nbat_x(const nbnxn_search       *nbs,
+void nbnxn_atomdata_copy_x_to_nbat_x(const Nbnxm::GridSet     &gridSet,
                                      const Nbnxm::AtomLocality locality,
                                      gmx_bool                  FillLocal,
-                                     rvec                     *x,
-                                     nbnxn_atomdata_t         *nbat,
-                                     gmx_wallcycle            *wcycle)
+                                     const rvec               *x,
+                                     nbnxn_atomdata_t         *nbat)
 {
-    wallcycle_start(wcycle, ewcNB_XF_BUF_OPS);
-    wallcycle_sub_start(wcycle, ewcsNB_X_BUF_OPS);
-
-    const Nbnxm::GridSet &gridSet = nbs->gridSet();
-
-    int                   gridBegin = 0;
-    int                   gridEnd   = 0;
+    int gridBegin = 0;
+    int gridEnd   = 0;
     switch (locality)
     {
         case Nbnxm::AtomLocality::All:
@@ -1076,9 +1070,6 @@ void nbnxn_atomdata_copy_x_to_nbat_x(const nbnxn_search       *nbs,
         }
         GMX_CATCH_ALL_AND_EXIT_WITH_FATAL_ERROR;
     }
-
-    wallcycle_sub_stop(wcycle, ewcsNB_X_BUF_OPS);
-    wallcycle_stop(wcycle, ewcNB_XF_BUF_OPS);
 }
 
 static void
@@ -1165,106 +1156,54 @@ nbnxn_atomdata_reduce_reals_simd(real gmx_unused * gmx_restrict dest,
 #endif
 }
 
-/* Add part of the force array(s) from nbnxn_atomdata_t to f */
+/* Add part of the force array(s) from nbnxn_atomdata_t to f
+ *
+ * Note: Adding restrict to f makes this function 50% slower with gcc 7.3
+ */
 static void
-nbnxn_atomdata_add_nbat_f_to_f_part(const Nbnxm::GridSet &gridSet,
-                                    const nbnxn_atomdata_t *nbat,
-                                    gmx::ArrayRef<const nbnxn_atomdata_output_t> out,
-                                    int nfa,
-                                    int a0, int a1,
-                                    rvec *f)
+nbnxn_atomdata_add_nbat_f_to_f_part(const Nbnxm::GridSet          &gridSet,
+                                    const nbnxn_atomdata_t        &nbat,
+                                    const nbnxn_atomdata_output_t &out,
+                                    const int                      a0,
+                                    const int                      a1,
+                                    rvec *                         f)
 {
-    gmx::ArrayRef<const int> cell = gridSet.cells();
+    gmx::ArrayRef<const int>  cell = gridSet.cells();
+    // Note: Using ArrayRef instead makes this code 25% slower with gcc 7.3
+    const real               *fnb  = out.f.data();
 
     /* Loop over all columns and copy and fill */
-    switch (nbat->FFormat)
+    switch (nbat.FFormat)
     {
         case nbatXYZ:
         case nbatXYZQ:
-            if (nfa == 1)
+            for (int a = a0; a < a1; a++)
             {
-                const real *fnb = out[0].f.data();
+                int i = cell[a]*nbat.fstride;
 
-                for (int a = a0; a < a1; a++)
-                {
-                    int i = cell[a]*nbat->fstride;
-
-                    f[a][XX] += fnb[i];
-                    f[a][YY] += fnb[i+1];
-                    f[a][ZZ] += fnb[i+2];
-                }
-            }
-            else
-            {
-                for (int a = a0; a < a1; a++)
-                {
-                    int i = cell[a]*nbat->fstride;
-
-                    for (int fa = 0; fa < nfa; fa++)
-                    {
-                        f[a][XX] += out[fa].f[i];
-                        f[a][YY] += out[fa].f[i+1];
-                        f[a][ZZ] += out[fa].f[i+2];
-                    }
-                }
+                f[a][XX] += fnb[i];
+                f[a][YY] += fnb[i + 1];
+                f[a][ZZ] += fnb[i + 2];
             }
             break;
         case nbatX4:
-            if (nfa == 1)
+            for (int a = a0; a < a1; a++)
             {
-                const real *fnb = out[0].f.data();
+                int i = atom_to_x_index<c_packX4>(cell[a]);
 
-                for (int a = a0; a < a1; a++)
-                {
-                    int i = atom_to_x_index<c_packX4>(cell[a]);
-
-                    f[a][XX] += fnb[i+XX*c_packX4];
-                    f[a][YY] += fnb[i+YY*c_packX4];
-                    f[a][ZZ] += fnb[i+ZZ*c_packX4];
-                }
-            }
-            else
-            {
-                for (int a = a0; a < a1; a++)
-                {
-                    int i = atom_to_x_index<c_packX4>(cell[a]);
-
-                    for (int fa = 0; fa < nfa; fa++)
-                    {
-                        f[a][XX] += out[fa].f[i+XX*c_packX4];
-                        f[a][YY] += out[fa].f[i+YY*c_packX4];
-                        f[a][ZZ] += out[fa].f[i+ZZ*c_packX4];
-                    }
-                }
+                f[a][XX] += fnb[i + XX*c_packX4];
+                f[a][YY] += fnb[i + YY*c_packX4];
+                f[a][ZZ] += fnb[i + ZZ*c_packX4];
             }
             break;
         case nbatX8:
-            if (nfa == 1)
+            for (int a = a0; a < a1; a++)
             {
-                const real *fnb = out[0].f.data();
+                int i = atom_to_x_index<c_packX8>(cell[a]);
 
-                for (int a = a0; a < a1; a++)
-                {
-                    int i = atom_to_x_index<c_packX8>(cell[a]);
-
-                    f[a][XX] += fnb[i+XX*c_packX8];
-                    f[a][YY] += fnb[i+YY*c_packX8];
-                    f[a][ZZ] += fnb[i+ZZ*c_packX8];
-                }
-            }
-            else
-            {
-                for (int a = a0; a < a1; a++)
-                {
-                    int i = atom_to_x_index<c_packX8>(cell[a]);
-
-                    for (int fa = 0; fa < nfa; fa++)
-                    {
-                        f[a][XX] += out[fa].f[i+XX*c_packX8];
-                        f[a][YY] += out[fa].f[i+YY*c_packX8];
-                        f[a][ZZ] += out[fa].f[i+ZZ*c_packX8];
-                    }
-                }
+                f[a][XX] += fnb[i + XX*c_packX8];
+                f[a][YY] += fnb[i + YY*c_packX8];
+                f[a][ZZ] += fnb[i + ZZ*c_packX8];
             }
             break;
         default:
@@ -1463,25 +1402,11 @@ static void nbnxn_atomdata_add_nbat_f_to_f_stdreduce(nbnxn_atomdata_t *nbat,
 }
 
 /* Add the force array(s) from nbnxn_atomdata_t to f */
-void
-nonbonded_verlet_t::atomdata_add_nbat_f_to_f(const Nbnxm::AtomLocality  locality,
-                                             rvec                      *f,
-                                             gmx_wallcycle             *wcycle)
+void reduceForces(nbnxn_atomdata_t          *nbat,
+                  const Nbnxm::AtomLocality  locality,
+                  const Nbnxm::GridSet      &gridSet,
+                  rvec                      *f)
 {
-    /* Skip the non-local reduction if there was no non-local work to do */
-    if (locality == Nbnxm::AtomLocality::NonLocal &&
-        pairlistSets().pairlistSet(Nbnxm::InteractionLocality::NonLocal).nblGpu[0]->sci.empty())
-    {
-        return;
-    }
-
-    wallcycle_start(wcycle, ewcNB_XF_BUF_OPS);
-    wallcycle_sub_start(wcycle, ewcsNB_F_BUF_OPS);
-
-    const Nbnxm::GridSet &gridSet = nbs->gridSet();
-
-    nbs_cycle_start(&nbs->cc[enbsCCreducef]);
-
     int a0 = 0;
     int na = 0;
     switch (locality)
@@ -1501,6 +1426,12 @@ nonbonded_verlet_t::atomdata_add_nbat_f_to_f(const Nbnxm::AtomLocality  locality
             break;
     }
 
+    if (na == 0)
+    {
+        /* The are no atoms for this reduction, avoid some overhead */
+        return;
+    }
+
     int nth = gmx_omp_nthreads_get(emntNonbonded);
 
     if (nbat->out.size() > 1)
@@ -1515,11 +1446,11 @@ nonbonded_verlet_t::atomdata_add_nbat_f_to_f(const Nbnxm::AtomLocality  locality
          */
         if (nbat->bUseTreeReduce)
         {
-            nbnxn_atomdata_add_nbat_f_to_f_treereduce(nbat.get(), nth);
+            nbnxn_atomdata_add_nbat_f_to_f_treereduce(nbat, nth);
         }
         else
         {
-            nbnxn_atomdata_add_nbat_f_to_f_stdreduce(nbat.get(), nth);
+            nbnxn_atomdata_add_nbat_f_to_f_stdreduce(nbat, nth);
         }
     }
 #pragma omp parallel for num_threads(nth) schedule(static)
@@ -1527,23 +1458,16 @@ nonbonded_verlet_t::atomdata_add_nbat_f_to_f(const Nbnxm::AtomLocality  locality
     {
         try
         {
-            nbnxn_atomdata_add_nbat_f_to_f_part(gridSet, nbat.get(),
-                                                nbat->out,
-                                                1,
-                                                a0+((th+0)*na)/nth,
-                                                a0+((th+1)*na)/nth,
+            nbnxn_atomdata_add_nbat_f_to_f_part(gridSet, *nbat,
+                                                nbat->out[0],
+                                                a0 + ((th + 0)*na)/nth,
+                                                a0 + ((th + 1)*na)/nth,
                                                 f);
         }
         GMX_CATCH_ALL_AND_EXIT_WITH_FATAL_ERROR;
     }
-
-    nbs_cycle_stop(&nbs->cc[enbsCCreducef]);
-
-    wallcycle_sub_stop(wcycle, ewcsNB_F_BUF_OPS);
-    wallcycle_stop(wcycle, ewcNB_XF_BUF_OPS);
 }
 
-/* Adds the shift forces from nbnxn_atomdata_t to fshift */
 void nbnxn_atomdata_add_nbat_fshift_to_fshift(const nbnxn_atomdata_t *nbat,
                                               rvec                   *fshift)
 {

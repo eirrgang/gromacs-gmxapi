@@ -1,7 +1,7 @@
 /*
  * This file is part of the GROMACS molecular simulation package.
  *
- * Copyright (c) 2018, by the GROMACS development team, led by
+ * Copyright (c) 2018,2019, by the GROMACS development team, led by
  * Mark Abraham, David van der Spoel, Berk Hess, and Erik Lindahl,
  * and including many others, as listed in the AUTHORS file in the
  * top-level source directory and at http://www.gromacs.org.
@@ -32,24 +32,29 @@
  * To help us fund GROMACS development, we humbly ask that you cite
  * the research papers on the package. Check out http://www.gromacs.org.
  */
-/*! \internal \file
+
+/*! \libinternal \file
+ * \brief Provides utility functions for MiMiC QM/MM
+ * \inlibraryapi
  *
- * \brief Declares the loop for simulation reruns
- *
- * \author Pascal Merz <pascal.merz@colorado.edu>
- * \ingroup module_mdrun
+ * \author Viacheslav Bolnykh <v.bolnykh@hpc-leap.eu>
+ * \ingroup module_mimic
  */
-#ifndef GMX_MDRUN_RERUN_H
-#define GMX_MDRUN_RERUN_H
+#ifndef GMX_MIMIC_MIMICUTILS_H
+#define GMX_MIMIC_MIMICUTILS_H
 
-#include "integrator.h"
+#include <vector>
 
-namespace gmx
-{
+struct gmx_mtop_t;
 
-//! MD simulations
-integrator_t do_rerun;
+/*! \brief Generates the list of QM atoms
+ *
+ * This function generates vector containing global IDs of QM atoms
+ * based on the information stored in the QM/MM group (egcQMMM)
+ *
+ * \param[in]    mtop   Global topology object
+ * \return              The list of global IDs of QM atoms
+ */
+std::vector<int> genQmmmIndices(const gmx_mtop_t &mtop);
 
-}      // namespace gmx
-
-#endif // GMX_MDRUN_RERUN_H
+#endif //GMX_MIMIC_MIMICUTILS_H

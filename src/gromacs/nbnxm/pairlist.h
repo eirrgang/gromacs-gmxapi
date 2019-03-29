@@ -52,14 +52,11 @@
 // to include it during OpenCL jitting without including config.h
 #include "gromacs/nbnxm/constants.h"
 
-struct NbnxnListParameters;
+#include "locality.h"
+
 struct NbnxnPairlistCpuWork;
 struct NbnxnPairlistGpuWork;
 
-namespace Nbnxm
-{
-enum class KernelType;
-}
 
 /* Convenience type for vector with aligned memory */
 template<typename T>
@@ -68,18 +65,6 @@ using AlignedVector = std::vector < T, gmx::AlignedAllocator < T>>;
 /* Convenience type for vector that avoids initialization at resize() */
 template<typename T>
 using FastVector = std::vector < T, gmx::DefaultInitializationAllocator < T>>;
-
-enum class PairlistType : int
-{
-    Simple4x2,
-    Simple4x4,
-    Simple4x8,
-    Hierarchical8x8,
-    Count
-};
-
-static constexpr gmx::EnumerationArray<PairlistType, int> IClusterSizePerListType = { { 4, 4, 4, 8 } };
-static constexpr gmx::EnumerationArray<PairlistType, int> JClusterSizePerListType = { { 2, 4, 8, 8 } };
 
 /* With CPU kernels the i-cluster size is always 4 atoms. */
 static constexpr int c_nbnxnCpuIClusterSize = 4;
@@ -105,6 +90,33 @@ static constexpr int c_nbnxnGpuClusterpairSplit = 2;
 
 /* The fixed size of the exclusion mask array for a half cluster pair */
 static constexpr int c_nbnxnGpuExclSize = c_nbnxnGpuClusterSize*c_nbnxnGpuClusterSize/c_nbnxnGpuClusterpairSplit;
+
+//! The available pair list types
+enum class PairlistType : int
+{
+    Simple4x2,
+    Simple4x4,
+    Simple4x8,
+    HierarchicalNxN,
+    Count
+};
+
+//! Gives the i-cluster size for each pairlist type
+static constexpr gmx::EnumerationArray<PairlistType, int> IClusterSizePerListType =
+{ {
+      c_nbnxnCpuIClusterSize,
+      c_nbnxnCpuIClusterSize,
+      c_nbnxnCpuIClusterSize,
+      c_nbnxnGpuClusterSize
+  } };
+//! Gives the j-cluster size for each pairlist type
+static constexpr gmx::EnumerationArray<PairlistType, int> JClusterSizePerListType =
+{ {
+      2,
+      4,
+      8,
+      c_nbnxnGpuClusterSize
+  } };
 
 /* A buffer data structure of 64 bytes
  * to be placed at the beginning and end of structs
@@ -212,6 +224,8 @@ struct nbnxn_excl_t
 /* Cluster pairlist type for use on CPUs */
 struct NbnxnPairlistCpu
 {
+    NbnxnPairlistCpu();
+
     gmx_cache_protect_t     cp0;
 
     int                     na_ci;       /* The number of atoms per i-cluster        */
@@ -226,9 +240,10 @@ struct NbnxnPairlistCpu
 
     int                     nci_tot;     /* The total number of i clusters           */
 
-    NbnxnPairlistCpuWork   *work;
+    /* Working data storage for list construction */
+    std::unique_ptr<NbnxnPairlistCpuWork> work;
 
-    gmx_cache_protect_t     cp1;
+    gmx_cache_protect_t                   cp1;
 };
 
 /* Cluster pairlist type, with extra hierarchies, for on the GPU
@@ -260,29 +275,13 @@ struct NbnxnPairlistGpu
     // The total number of i-clusters
     int                            nci_tot;
 
-    NbnxnPairlistGpuWork          *work;
+    /* Working data storage for list construction */
+    std::unique_ptr<NbnxnPairlistGpuWork> work;
 
-    gmx_cache_protect_t            cp1;
+    gmx_cache_protect_t                   cp1;
 };
 
-struct nbnxn_pairlist_set_t
-{
-    nbnxn_pairlist_set_t(const NbnxnListParameters &listParams);
-
-    int                         nnbl;         /* number of lists */
-    NbnxnPairlistCpu          **nbl;          /* lists for CPU */
-    NbnxnPairlistCpu          **nbl_work;     /* work space for rebalancing lists */
-    NbnxnPairlistGpu          **nblGpu;       /* lists for GPU */
-    const NbnxnListParameters  &params;       /* Pairlist parameters desribing setup and ranges */
-    gmx_bool                    bCombined;    /* TRUE if lists get combined into one (the 1st) */
-    gmx_bool                    bSimple;      /* TRUE if the list of of type "simple"
-                                                 (na_sc=na_s, no super-clusters used) */
-
-    /* Counts for debug printing */
-    int                     natpair_ljq;           /* Total number of atom pairs for LJ+Q kernel */
-    int                     natpair_lj;            /* Total number of atom pairs for LJ kernel   */
-    int                     natpair_q;             /* Total number of atom pairs for Q kernel    */
-    std::vector<t_nblist *> nbl_fep;               /* List of free-energy atom pair interactions */
-};
+//! Initializes a free-energy pair-list
+void nbnxn_init_pairlist_fep(t_nblist *nl);
 
 #endif

@@ -1,7 +1,7 @@
 /*
  * This file is part of the GROMACS molecular simulation package.
  *
- * Copyright (c) 2015,2018, by the GROMACS development team, led by
+ * Copyright (c) 2019, by the GROMACS development team, led by
  * Mark Abraham, David van der Spoel, Berk Hess, and Erik Lindahl,
  * and including many others, as listed in the AUTHORS file in the
  * top-level source directory and at http://www.gromacs.org.
@@ -32,22 +32,56 @@
  * To help us fund GROMACS development, we humbly ask that you cite
  * the research papers on the package. Check out http://www.gromacs.org.
  */
-/*! \brief Declares the integrator for test particle insertion
+
+/*! \internal \file
+ * \brief
+ * Implements the PairlistParams constructor
  *
  * \author Berk Hess <hess@kth.se>
- * \ingroup module_mdrunx
+ * \ingroup module_nbnxm
  */
-#ifndef GMX_MDRUN_TPI_H
-#define GMX_MDRUN_TPI_H
 
-#include "integrator.h"
+#include "gmxpre.h"
 
-namespace gmx
+#include "pairlistparams.h"
+
+#include "gromacs/nbnxm/nbnxm.h"
+#include "gromacs/nbnxm/nbnxm_geometry.h"
+#include "gromacs/utility/gmxassert.h"
+
+
+PairlistParams::PairlistParams(const Nbnxm::KernelType kernelType,
+                               const bool              haveFep,
+                               const real              rlist,
+                               const bool              haveMultipleDomains) :
+    haveFep(haveFep),
+    rlistOuter(rlist),
+    rlistInner(rlist),
+    haveMultipleDomains(haveMultipleDomains),
+    useDynamicPruning(false),
+    nstlistPrune(-1),
+    numRollingPruningParts(1),
+    lifetime(-1)
 {
-
-//! Test particle insertion.
-integrator_t do_tpi;
-
-}      // namespace gmx
-
-#endif // GMX_MDRUN_TPI_H
+    if (!Nbnxm::kernelTypeUsesSimplePairlist(kernelType))
+    {
+        pairlistType = PairlistType::HierarchicalNxN;
+    }
+    else
+    {
+        switch (Nbnxm::JClusterSizePerKernelType[kernelType])
+        {
+            case 2:
+                pairlistType = PairlistType::Simple4x2;
+                break;
+            case 4:
+                pairlistType = PairlistType::Simple4x4;
+                break;
+            case 8:
+                pairlistType = PairlistType::Simple4x8;
+                break;
+            default:
+                GMX_RELEASE_ASSERT(false, "Kernel type does not have a pairlist type");
+        }
+    }
+}

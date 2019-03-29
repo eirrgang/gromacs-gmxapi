@@ -1,7 +1,7 @@
 /*
  * This file is part of the GROMACS molecular simulation package.
  *
- * Copyright (c) 2018, by the GROMACS development team, led by
+ * Copyright (c) 2019, by the GROMACS development team, led by
  * Mark Abraham, David van der Spoel, Berk Hess, and Erik Lindahl,
  * and including many others, as listed in the AUTHORS file in the
  * top-level source directory and at http://www.gromacs.org.
@@ -32,23 +32,31 @@
  * To help us fund GROMACS development, we humbly ask that you cite
  * the research papers on the package. Check out http://www.gromacs.org.
  */
-
-/*! \internal \file
+/*! \libinternal \file
+ * \brief
+ * Serialization routines for volume data format mrc.
  *
- * \brief Declares the loop for MiMiC QM/MM
- *
- * \author Viacheslav Bolnykh <v.bolnykh@hpc-leap.eu>
- * \ingroup module_mdrun
+ * \author Christian Blau <cblau@gwdg.de>
+ * \ingroup module_fileio
  */
-#ifndef GMX_MIMIC_MIMIC_H
-#define GMX_MIMIC_MIMIC_H
-#include "integrator.h"
 
+#ifndef GMX_FILEIO_MRCSERIALIZER_H
+#define GMX_FILEIO_MRCSERIALIZER_H
 namespace gmx
 {
+class ISerializer;
+struct MrcDensityMapHeader;
 
-//! MD simulations
-integrator_t do_mimic;
-
+/*! \brief Serializes an MrcDensityMapHeader from a given serializer.
+ * \param[in] serializer the serializer
+ * \param[in] mrcHeader file header to be serialized
+ */
+void serializeMrcDensityMapHeader(ISerializer               *serializer,
+                                  const MrcDensityMapHeader &mrcHeader);
+/*! \brief Deserializes an MrcDensityMapHeader from a given serializer.
+ * \param[in] serializer the serializer
+ * \returns mrc density map header
+ */
+MrcDensityMapHeader deserializeMrcDensityMapHeader(ISerializer *serializer);
 }      // namespace gmx
-#endif //GMX_MIMIC_MIMIC_H
+#endif /* end of include guard: GMX_FILEIO_MRCSERIALIZER_H */

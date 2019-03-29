@@ -1,7 +1,9 @@
 /*
  * This file is part of the GROMACS molecular simulation package.
  *
- * Copyright (c) 2018, by the GROMACS development team, led by
+ * Copyright (c) 1991-2000, University of Groningen, The Netherlands.
+ * Copyright (c) 2001-2004, The GROMACS development team.
+ * Copyright (c) 2013,2014,2015,2016,2017,2018,2019, by the GROMACS development team, led by
  * Mark Abraham, David van der Spoel, Berk Hess, and Erik Lindahl,
  * and including many others, as listed in the AUTHORS file in the
  * top-level source directory and at http://www.gromacs.org.
@@ -33,28 +35,50 @@
  * the research papers on the package. Check out http://www.gromacs.org.
  */
 
-#include "gmxpre.h"
+#ifndef GMX_MDLIB_STAT_H
+#define GMX_MDLIB_STAT_H
 
-#include "MimicUtils.h"
+#include "gromacs/math/vectypes.h"
 
-std::vector<int> genQmmmIndices(const gmx_mtop_t &mtop)
+struct gmx_ekindata_t;
+struct gmx_enerdata_t;
+struct t_vcm;
+struct t_inputrec;
+struct t_commrec;
+
+namespace gmx
 {
-    std::vector<int> output;
-    int              global_at = 0;
-    unsigned char   *grpnr     = mtop.groups.grpnr[egcQMMM];
-    for (const gmx_molblock_t &molb : mtop.molblock)
-    {
-        for (int mol = 0; mol < molb.nmol; ++mol)
-        {
-            for (int n_atom = 0; n_atom < mtop.moltype[molb.type].atoms.nr; ++n_atom)
-            {
-                if (!grpnr || !grpnr[global_at])
-                {
-                    output.push_back(global_at);
-                }
-                ++global_at;
-            }
-        }
-    }
-    return output;
+class Constraints;
 }
+
+typedef struct gmx_global_stat *gmx_global_stat_t;
+
+gmx_global_stat_t global_stat_init(const t_inputrec *ir);
+
+void global_stat_destroy(gmx_global_stat_t gs);
+
+/*! \brief All-reduce energy-like quantities over cr->mpi_comm_mysim  */
+void global_stat(const gmx_global_stat *gs,
+                 const t_commrec *cr, gmx_enerdata_t *enerd,
+                 tensor fvir, tensor svir, rvec mu_tot,
+                 const t_inputrec *inputrec,
+                 gmx_ekindata_t *ekind,
+                 const gmx::Constraints *constr, t_vcm *vcm,
+                 int nsig, real *sig,
+                 int *totalNumberOfBondedInteractions,
+                 gmx_bool bSumEkinhOld, int flags);
+
+/*! \brief Returns TRUE if io should be done */
+inline bool do_per_step(int64_t step, int64_t nstep)
+{
+    if (nstep != 0)
+    {
+        return (step % nstep) == 0;
+    }
+    else
+    {
+        return false;
+    }
+}
+
+#endif //GMX_MDLIB_STAT_H

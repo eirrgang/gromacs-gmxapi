@@ -37,7 +37,8 @@ RUN apt-get update && \
         python3-venv && \
     rm -rf /var/lib/apt/lists/*
 
-# TODO: use pyenv for multiple Python installations for explicit version coverage.
+# TODO: Use non-system Python installations for explicit version coverage.
+# Consider pyenv for generic management of Python environment.
 
 ENV CMAKE_ROOT /usr/local/cmake
 ENV PATH $CMAKE_ROOT/bin:$PATH

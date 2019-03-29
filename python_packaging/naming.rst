@@ -90,7 +90,7 @@ PyPI distributions
 
 A PyPI distribution archive uses the distribution name defined in the ``setup.py`` file.
 
-My ``uvaerici`` PyPI account owns projects with stub distributions for
+The ``uvaerici`` PyPI account owns projects with stub distributions for
 ``gmx`` (linked to the gmxapi.readthedocs.org page, which is linked to https://github.com/gmxapi/gmxapi),
 ``gromacs`` (linked to https://github.com/kassonlab/gromacs-gmxapi),
 and ``gmxapi`` (linked to https://github.com/kassonlab/gmxapi).
@@ -98,10 +98,10 @@ We should think about what to do with those names, what they should mean, and wh
 Note, though, that we should control project names corresponding to the
 first component of any entry point group names that we adopt (see below).
 
-PyPI projects can have multiple "collaborators" with varying degrees of access.
-Right now, my ``eirrgang`` PyPI account is also an owner of these projects,
-so I can use ``twine`` to publish updates to the distributions from various credentials
-and can extend that authority to other people or automated tools.
+PyPI projects can have multiple "collaborators" with varying degrees of access,
+allowing multiple accounts to use ``twine`` to publish updates to the
+distributions and to extend that authority to other people or automated tools.
+Initially, ``uvaerici`` and ``eirrgang`` PyPI accounts have this authority.
 
 Plugins and entry points
 ------------------------
@@ -135,11 +135,13 @@ Python naming proposal (partial)
 Summary:
 * GROMACS bundles a Python package installed and imported as "gmxapi".
 * For brevity and consistency, we update our Python convention to ``import gmxapi as gmx``.
-* We can extend the ``gmxapi`` package bundled with GROMACS through the Python packaging system,
-  if we find that experimental functionality develops so much conflict with the package in the
-  master branch that separate packages need to be maintained.
-* We can preemptively name our experimental package "gmxapi_kl"
+* Experimental functionality may conflict with the package in the master branch.
+  If maintaining divergent packages becomes a problem, we can instead use the
+  Python packaging system to extend ``gmxapi`` functionality from other-named
+  packages (e.g. "gmxapi_kl")
 
+Proposal
+~~~~~~~~
 Reserve the distribution name "gromacs" for the core library such that, in the future,
 ``pip install gromacs`` or ``conda install gromacs`` explicitly refers to a
 full GROMACS installation with public API enabled.
@@ -148,8 +150,12 @@ We could also use this as an unadvertised package to help us test experimental
 versions of the Python package against commits in or targeted for the GROMACS
 ``master`` branch.
 
+Proposal
+~~~~~~~~
 Use the distribution name "gmxapi" for the Python distribution package.
 
+Proposal
+~~~~~~~~
 Avoid "gmx" in Python packaging unless/until
 * the distinction is better defined between the ``gmx`` C++ name space,
   the ``gmx`` command line tool name space, and the ``gmx`` Python name space
@@ -159,10 +165,17 @@ As long as no module or package is actually named "gmx," I think it is okay to
 use "gmx" as an abbreviation for "GROMACS" or "gmxapi", and to document conventions
 such as ``import gmxapi as gmx``
 
+Proposal
+~~~~~~~~
 For gmxapi "operations" or features in the ``gromacs`` or ``gmxapi`` gmxapi operation name spaces,
 use ``pkg_resources`` entry points to allow us to provide pre-release or experimental
 operation implementations without naming conflicts or confusing naming conventions.
 
+Proposal
+~~~~~~~~
 Allow GROMACS 2019 and the gmxapi 0.0.7 release to remain synonymous with the
 distribution package and import package named ``gmx``.
-I can make a source distribution for PyPI if it makes sense to fill that space.
+
+..  note::
+    Disposition of ``gmx`` namespace on PyPI TBD.
+    We can consider putting a source distribution on PyPI if it makes sense to fill that space.

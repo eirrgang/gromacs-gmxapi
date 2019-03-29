@@ -90,8 +90,8 @@
 #include "gromacs/mdlib/resethandler.h"
 #include "gromacs/mdlib/shellfc.h"
 #include "gromacs/mdlib/sighandler.h"
-#include "gromacs/mdlib/sim_util.h"
 #include "gromacs/mdlib/simulationsignal.h"
+#include "gromacs/mdlib/stat.h"
 #include "gromacs/mdlib/stophandler.h"
 #include "gromacs/mdlib/tgroup.h"
 #include "gromacs/mdlib/trajectory_writing.h"
@@ -413,7 +413,7 @@ void gmx::Integrator::do_md()
     if (bPMETune)
     {
         pme_loadbal_init(&pme_loadbal, cr, mdlog, *ir, state->box,
-                         *fr->ic, fr->nbv->pairlistSets().params(), fr->pmedata, use_GPU(fr->nbv.get()),
+                         *fr->ic, *fr->nbv, fr->pmedata, fr->nbv->useGpu(),
                          &bPMETunePrinting);
     }
 
@@ -1475,7 +1475,7 @@ void gmx::Integrator::do_md()
         step_rel++;
 
         resetHandler->resetCounters(
-                step, step_rel, mdlog, fplog, cr, (use_GPU(fr->nbv.get()) ? fr->nbv.get() : nullptr),
+                step, step_rel, mdlog, fplog, cr, fr->nbv.get(),
                 nrnb, fr->pmedata, pme_loadbal, wcycle, walltime_accounting);
 
         /* If bIMD is TRUE, the master updates the IMD energy record and sends positions to VMD client */
@@ -1510,7 +1510,7 @@ void gmx::Integrator::do_md()
 
     if (bPMETune)
     {
-        pme_loadbal_done(pme_loadbal, fplog, mdlog, use_GPU(fr->nbv.get()));
+        pme_loadbal_done(pme_loadbal, fplog, mdlog, fr->nbv->useGpu());
     }
 
     done_shellfc(fplog, shellfc, step_rel);
