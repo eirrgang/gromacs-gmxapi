@@ -73,7 +73,7 @@ class ImmediateResultTestCase(unittest.TestCase):
         assert len(list_result.result()) == len(list_a) * 2
         assert tuple(list_result.result()) == tuple(list_a + list_a)
 
-        list_b = gmx.operation.make_constant([42])
+        list_b = gmx.ndarray([42])
 
         list_result = gmx.operation.concatenate_lists(sublists=[list_b])
         assert list_result.result()[0] == 42

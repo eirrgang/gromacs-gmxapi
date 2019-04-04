@@ -33,62 +33,32 @@
  * the research papers on the package. Check out http://www.gromacs.org.
  */
 
-/*! \internal \file
- * \brief Exports Python bindings for gmxapi._gmxapi module.
- *
- * \ingroup module_python
- */
+#ifndef GMXPY_DATA_H
+#define GMXPY_DATA_H
 
-#include "module.h"
+namespace gmxpy {
 
-#include <memory>
+// Note: avoid templating on number-of-dimensions because then we can't have an
+// arbitrary number of dimensions after compile time. Instead, we can have special
+// cases for 1 and 2 dimensions if optimizations are possible, and dispatch at
+// run time.
+template<typename Scalar, typename Handle> class NDArray; // primary template
 
-#include "pybind11/pybind11.h"
+// partial specialization where the handle is a container templated on the scalar type.
+template<typename Scalar, template<typename> class Container>
+class NDArray<Scalar, Container<Scalar>>;
 
-#include "gmxapi/status.h"
-#include "gmxapi/version.h"
+// Partial specialization for vector container type.
+template<typename Scalar>
+class NDArray<Scalar, std::vector<Scalar>>;
 
-#include "data.h"
+// Partial specialization for array of size L can be compiled, but must be
+// exported to Python with conversion to a type without L in its signature.
+template<typename Scalar, int L>
+class NDArray<Scalar, std::array<Scalar, L>>;
 
 
-namespace py = pybind11;
 
-// Export Python module.
+} // end namespace gmxpy
 
-/// used to set __doc__
-/// pybind11 uses const char* objects for docstrings. C++ raw literals can be used.
-const char* const docstring = R"delimeter(
-gmxapi core module
-==================
-
-gmxapi._gmxapi provides Python access to the GROMACS C++ API so that client code can be
-implemented in Python, C++, or a mixture. The classes provided are mirrored on the
-C++ side in the gmxapi namespace as best as possible.
-
-This documentation is generated from C++ extension code. Refer to C++ source
-code and developer documentation for more details.
-
-)delimeter";
-
-/*! \brief Export gmxapi._gmxapi Python module in shared object file.
- *
- * \ingroup module_python
- */
-
-// Instantiate the Python module
-PYBIND11_MODULE(_gmxapi, m){
-    using namespace gmxpy::detail;
-    m.doc() = docstring;
-
-    // Export core bindings
-    m.def("has_feature",
-          &gmxapi::Version::hasFeature,
-          "Check the gmxapi library for a named feature.");
-
-    py::class_< ::gmxapi::Status > gmx_status(m, "Status", "Holds status for API operations.");
-
-    // Get bindings exported by the various components.
-    export_context(m);
-    export_system(m);
-
-} // end pybind11 module
+#endif // GMXPY_DATA_H

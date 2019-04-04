@@ -61,7 +61,9 @@ import functools
 import inspect
 import weakref
 from contextlib import contextmanager
+from typing import Iterable, TypeVar
 
+from gmxapi.datamodel import NDArray, InputCollection
 from gmxapi import exceptions
 
 
@@ -79,14 +81,14 @@ class ImmediateResult(object):
     class directly.
     """
 
-    def __init__(self, implementation=None, input=None):
+    def __init__(self, implementation=None, bound_arguments=None):
         """Wrap a callable for a simple data source that does not need Future behavior.
 
         Provides a gmxapi compatible interface for data sources.
 
         Arguments:
             implementation : Python callable that consumes ``input`` and returns data
-            input : object compatible with the call signature of ``implementation``
+            bound_arguments : object compatible with the call signature of ``implementation``
 
         ``input`` must have an ``args`` attribute and a ``kwargs`` attribute to be used as
 
@@ -96,12 +98,15 @@ class ImmediateResult(object):
         Only suitable for function objects without side effects.
         """
         assert callable(implementation)
-        assert hasattr(input, 'args')
-        assert hasattr(input, 'kwargs')
         # Retain input information for introspection.
-        self.__input = input
+        self.__input = bound_arguments
 
-        self.__cached_value = implementation(*input.args, **input.kwargs)
+        if bound_arguments is not None:
+            assert hasattr(bound_arguments, 'args')
+            assert hasattr(bound_arguments, 'kwargs')
+            self.__cached_value = implementation(*bound_arguments.args, **bound_arguments.kwargs)
+        else:
+            self.__cached_value = implementation()
         # TODO: (FR4) need a utility to resolve the base type of a value
         #  that may be a proxy object.
         self._dtype = type(self.__cached_value)
@@ -114,6 +119,33 @@ class ImmediateResult(object):
     def result(self):
         """Return value of the wrapped function."""
         return self.__cached_value
+
+    @classmethod
+    def from_data(cls, data, dtype: type):
+        """Create an ImmediateResult wrapper of given type from a data object.
+
+        If data is a future, it is resolved immediately.
+
+        Raises exceptions.TypeError if data cannot be represented as type dtype.
+        """
+        if hasattr(data, 'dtype'):
+            if not isinstance(data.dtype, dtype):
+                raise exceptions.TypeError('{} not compatible with {}'.format(data.dtype, dtype))
+            if hasattr(data, 'result'):
+                return cls(lambda: dtype(data.result()))
+            else:
+                return cls(lambda: dtype(data))
+
+
+def gmxapi_dtype(cls):
+    """Find the most appropriate corresponding gmxapi type.
+
+    Arguments:
+        cls : Type argument. To inspect data, first extract the data's type with, e.g. `type(data)`
+
+    """
+    if not isinstance(cls, type):
+        raise exceptions.UsageError('Argument must be a type or class. Use `type(arg)`?')
 
 
 def computed_result(function):
@@ -133,6 +165,23 @@ def computed_result(function):
     functions may force immediate resolution of data dependencies and/or may
     be called more than once to satisfy dependent operation inputs.
     """
+    try:
+        sig = inspect.signature(function)
+    except TypeError as T:
+        raise exceptions.ApiError('Can not inspect type of provided function argument.') from T
+    except ValueError as V:
+        raise exceptions.ApiError('Can not inspect provided function signature.') from V
+    # Note: Introspection could fail.
+    # Note: ApiError indicates a bug because we should handle this more intelligently.
+    # TODO: Figure out what to do with exceptions where this introspection
+    #  and rebinding won't work.
+    # ref: https://docs.python.org/3/library/inspect.html#introspecting-callables-with-the-signature-object
+
+    # 1. Get name and valid gmxapi type for all arguments.
+    # 2. Define the Input data structure for the dependency.
+    # 3. Create an instance of the Input from the provided arguments.
+    # 4. Bind data from the Input to the function to be called.
+    input_collection = InputCollection(sig)
 
     @functools.wraps(function)
     def new_function(*args, **kwargs):
@@ -142,31 +191,19 @@ def computed_result(function):
         # * Add handling for typed abstractions in wrapper function.
         # * Process arguments to the wrapper function into `input`
 
-        sig = inspect.signature(function)
-        # Note: Introspection could fail.
-        # TODO: Figure out what to do with exceptions where this introspection
-        #  and rebinding won't work.
-        # ref: https://docs.python.org/3/library/inspect.html#introspecting-callables-with-the-signature-object
+        input_collection.bind(*args, **kwargs)
+
+        # 1. Inspect the return annotation to determine valid gmxapi type(s)
+        # 2. Generate a Result object advertising the correct type, bound to the
+        #    Input and implementing function.
+        # 3. Transform the result() data to the correct type.
 
         # TODO: (FR3+) create a serializable data structure for inputs discovered
         #  from function introspection.
 
         # TODO: (FR4) handle typed abstractions in input arguments
 
-        input_list = []
-        for arg in args:
-            if hasattr(arg, 'result'):
-                input_list.append(arg.result())
-            else:
-                input_list.append(arg)
-        input_dict = {}
-        for name, value in kwargs.items():
-            if hasattr(value, 'result'):
-                input_dict[name] = value.result()
-            else:
-                input_dict[name] = value
-
-        input_pack = sig.bind(*input_list, **input_dict)
+        input_pack = input_collection.input_pack()
 
         result_object = ImmediateResult(function, input_pack)
         return result_object
@@ -174,9 +211,13 @@ def computed_result(function):
     return new_function
 
 
+Scalar = TypeVar('Scalar')
+
+
 @computed_result
-def append_list(a: list = (), b: list = ()):
-    """Operation that consumes two lists and produces a concatenated single list."""
+def append_list(a: list = (), b: list = ()) -> list:
+    """Operation that consumes two sequences and produces a concatenated single sequence.
+    """
     # TODO: (FR4) Returned list should be an NDArray.
     if isinstance(a, (str, bytes)) or isinstance(b, (str, bytes)):
         raise exceptions.ValueError('Input must be a pair of lists.')
@@ -205,7 +246,7 @@ def concatenate_lists(sublists: list = ()):
 
 
 @computed_result
-def make_constant(value):
+def make_constant(value: Scalar):
     """Provide a predetermined value at run time.
 
     This is a trivial operation that provides a (typed) value, primarily for
@@ -226,7 +267,7 @@ def make_constant(value):
 # TODO: For outputs, distinguish between "results" and "events".
 #  Both are published to the resource manager in the same way, but the relationship
 #  with subscribers is potentially different.
-def function_wrapper(output=None):
+def function_wrapper(output: dict = None):
     """Generate a decorator for wrapped functions with signature manipulation.
 
     New function accepts the same arguments, with additional arguments required by
@@ -807,3 +848,9 @@ def function_wrapper(output=None):
         return factory
 
     return decorator
+
+
+@function_wrapper(output={'simulation_input': str})
+def read_tpr(tprfile: str = ''):
+    """Prepare simulation input pack from a TPR file."""
+    output.simulation_input = ''

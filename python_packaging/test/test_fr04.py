@@ -39,8 +39,9 @@ import pytest
 import gmxapi as gmx
 from gmxapi.version import has_feature
 
+
 @pytest.mark.skipif(not has_feature('fr4'),
-                   reason="Feature level not met.")
+                    reason="Feature level not met.")
 def test_fr4():
     """FR4: Dimensionality and typing of named data causes generation of correct work topologies."""
     N = 10

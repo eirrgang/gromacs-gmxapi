@@ -42,6 +42,7 @@ import subprocess
 
 from gmxapi import exceptions
 from gmxapi import logger as root_logger
+from gmxapi.datamodel import OutputCollection
 from gmxapi.operation import function_wrapper, concatenate_lists, make_constant
 
 # Module-level logger
@@ -67,7 +68,7 @@ logger.info('Importing gmxapi.commandline_operation')
 # TODO: Operation returns the output object when called with the shorter signature.
 #
 @function_wrapper(output={'erroroutput': str, 'returncode': int})
-def cli(command: list = None, shell: bool = None, output=None):
+def cli(command: list = None, shell: bool = None, output: OutputCollection = None):
     """Execute a command line program in a subprocess.
 
     Configure an executable in a subprocess. Executes when run in an execution
@@ -238,7 +239,7 @@ def commandline_operation(executable=None,
     # will not be published until the rest of the operation has run (i.e. the cli() executable.)
 
     @function_wrapper(output={'erroroutput': str, 'returncode': int, 'file': dict})
-    def merged_ops(erroroutput: str = None, returncode: int = None, file: dict = None, output=None):
+    def merged_ops(erroroutput: str = None, returncode: int = None, file: dict = None, output: OutputCollection = None):
         assert erroroutput is not None
         assert returncode is not None
         assert file is not None
