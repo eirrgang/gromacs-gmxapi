@@ -1628,6 +1628,7 @@ void init_forcerec(FILE                             *fp,
     gmx_bool       bFEP_NonBonded;
     int           *nm_ind, egp_flags;
 
+
     /* By default we turn SIMD kernels on, but it might be turned off further down... */
     fr->use_simd_kernels = TRUE;
 
