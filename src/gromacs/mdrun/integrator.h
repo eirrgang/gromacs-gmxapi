@@ -76,6 +76,7 @@ class BoxDeformation;
 class Constraints;
 class PpForceWorkload;
 class IMDOutputProvider;
+class ImdSession;
 class MDLogger;
 class MDAtoms;
 class StopHandlerBuilder;
@@ -139,6 +140,8 @@ struct Integrator
     IMDOutputProvider                  *outputProvider;
     //! Contains user input mdp options.
     t_inputrec                         *inputrec;
+    //! The Interactive Molecular Dynamics session.
+    ImdSession                         *imdSession;
     //! Full system topology.
     gmx_mtop_t                         *top_global;
     //! Helper struct for force calculations.

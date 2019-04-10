@@ -65,6 +65,7 @@ class t_state;
 namespace gmx
 {
 class Constraints;
+class ImdSession;
 class MDAtoms;
 class MDLogger;
 } // namespace
@@ -95,6 +96,7 @@ void dd_partition_system(FILE                    *fplog,
                          t_state                 *state_global,
                          const gmx_mtop_t        &top_global,
                          const t_inputrec        *ir,
+                         gmx::ImdSession         *imdSession,
                          t_state                 *state_local,
                          PaddedVector<gmx::RVec> *f,
                          gmx::MDAtoms            *mdatoms,

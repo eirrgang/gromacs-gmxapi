@@ -66,8 +66,9 @@ struct t_nrnb;
 namespace gmx
 {
 class Awh;
-class PpForceWorkload;
 class ForceWithVirial;
+class ImdSession;
+class PpForceWorkload;
 class MDLogger;
 }
 
@@ -95,6 +96,7 @@ void do_force(FILE                                     *log,
               const t_inputrec                         *inputrec,
               gmx::Awh                                 *awh,
               gmx_enfrot                               *enforcedRotation,
+              gmx::ImdSession                          *imdSession,
               int64_t                                   step,
               t_nrnb                                   *nrnb,
               gmx_wallcycle                            *wcycle,

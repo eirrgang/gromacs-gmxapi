@@ -58,6 +58,7 @@ class t_state;
 namespace gmx
 {
 class Constraints;
+class ImdSession;
 class PpForceWorkload;
 }
 
@@ -81,6 +82,7 @@ void relax_shell_flexcon(FILE                                     *log,
                          gmx_enfrot                               *enforcedRotation,
                          int64_t                                   mdstep,
                          const t_inputrec                         *inputrec,
+                         gmx::ImdSession                          *imdSession,
                          gmx_bool                                  bDoNS,
                          int                                       force_flags,
                          gmx_localtop_t                           *top,
