@@ -50,6 +50,7 @@
 #include "gromacs/utility/real.h"
 
 class energyhistory_t;
+struct gmx_enerdata_t;
 struct gmx_enfrot;
 struct gmx_mtop_t;
 struct gmx_membed_t;
@@ -75,6 +76,7 @@ class BoxDeformation;
 class Constraints;
 class PpForceWorkload;
 class IMDOutputProvider;
+class ImdSession;
 class MDLogger;
 class MDAtoms;
 class StopHandlerBuilder;
@@ -138,6 +140,8 @@ struct Integrator
     IMDOutputProvider                  *outputProvider;
     //! Contains user input mdp options.
     t_inputrec                         *inputrec;
+    //! The Interactive Molecular Dynamics session.
+    ImdSession                         *imdSession;
     //! Full system topology.
     gmx_mtop_t                         *top_global;
     //! Helper struct for force calculations.
@@ -154,6 +158,8 @@ struct Integrator
     gmx_wallcycle                      *wcycle;
     //! Parameters for force calculations.
     t_forcerec                         *fr;
+    //! Data for energy output.
+    gmx_enerdata_t                     *enerd;
     //! Schedule of force-calculation work each step for this task.
     PpForceWorkload                    *ppForceWorkload;
     //! Parameters for replica exchange algorihtms.

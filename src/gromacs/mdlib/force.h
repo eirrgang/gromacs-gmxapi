@@ -45,7 +45,7 @@ class DDBalanceRegionHandler;
 struct gmx_edsam;
 struct gmx_enerdata_t;
 struct gmx_enfrot;
-struct gmx_groups_t;
+struct SimulationGroups;
 struct gmx_grppairener_t;
 struct gmx_localtop_t;
 struct gmx_multisim_t;
@@ -66,8 +66,9 @@ struct t_nrnb;
 namespace gmx
 {
 class Awh;
-class PpForceWorkload;
 class ForceWithVirial;
+class ImdSession;
+class PpForceWorkload;
 class MDLogger;
 }
 
@@ -95,14 +96,11 @@ void do_force(FILE                                     *log,
               const t_inputrec                         *inputrec,
               gmx::Awh                                 *awh,
               gmx_enfrot                               *enforcedRotation,
+              gmx::ImdSession                          *imdSession,
               int64_t                                   step,
               t_nrnb                                   *nrnb,
               gmx_wallcycle                            *wcycle,
-              // TODO top can be const when the group scheme no longer
-              // builds exclusions during neighbor searching within
-              // do_force_cutsGROUP.
-              gmx_localtop_t                           *top,
-              const gmx_groups_t                       *groups,
+              const gmx_localtop_t                     *top,
               matrix                                    box,
               gmx::ArrayRefWithPadding<gmx::RVec>       coordinates,
               history_t                                *hist,
@@ -131,15 +129,15 @@ void do_force(FILE                                     *log,
  * f is always required.
  */
 
-void ns(FILE               *fplog,
-        t_forcerec         *fr,
-        matrix              box,
-        const gmx_groups_t *groups,
-        gmx_localtop_t     *top,
-        const t_mdatoms    *md,
-        const t_commrec    *cr,
-        t_nrnb             *nrnb,
-        gmx_bool            bFillGrid);
+void ns(FILE                      *fplog,
+        t_forcerec                *fr,
+        matrix                     box,
+        const SimulationGroups    *groups,
+        gmx_localtop_t            *top,
+        const t_mdatoms           *md,
+        const t_commrec           *cr,
+        t_nrnb                    *nrnb,
+        gmx_bool                   bFillGrid);
 /* Call the neighborsearcher */
 
 void do_force_lowlevel(t_forcerec   *fr,

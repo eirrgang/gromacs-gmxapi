@@ -169,11 +169,9 @@ void gmx::Integrator::do_md()
     matrix                  parrinellorahmanMu, M;
     gmx_repl_ex_t           repl_ex = nullptr;
     gmx_localtop_t          top;
-    gmx_enerdata_t         *enerd;
     PaddedVector<gmx::RVec> f {};
     gmx_global_stat_t       gstat;
     t_graph                *graph = nullptr;
-    gmx_groups_t           *groups;
     gmx_shellfc_t          *shellfc;
     gmx_bool                bSumEkinhOld, bDoReplEx, bExchanged, bNeedRepartition;
     gmx_bool                bTemp, bPres, bTrotter;
@@ -194,8 +192,7 @@ void gmx::Integrator::do_md()
     gmx_bool              bPMETune         = FALSE;
     gmx_bool              bPMETunePrinting = FALSE;
 
-    /* Interactive MD */
-    gmx_bool          bIMDstep = FALSE;
+    bool                  bInteractiveMDstep = false;
 
     /* Domain decomposition could incorrectly miss a bonded
        interaction, but checking for that requires a global
@@ -232,7 +229,7 @@ void gmx::Integrator::do_md()
     nstglobalcomm   = check_nstglobalcomm(mdlog, nstglobalcomm, ir, cr);
     bGStatEveryStep = (nstglobalcomm == 1);
 
-    groups = &top_global->groups;
+    SimulationGroups                  *groups = &top_global->groups;
 
     std::unique_ptr<EssentialDynamics> ed = nullptr;
     if (opt2bSet("-ei", nfile, fnm) || observablesHistory->edsamHistory != nullptr)
@@ -258,11 +255,6 @@ void gmx::Integrator::do_md()
     gmx::EnergyOutput energyOutput;
     energyOutput.prepare(mdoutf_get_fp_ene(outf), top_global, ir, mdoutf_get_fp_dhdl(outf));
 
-    /* Energy terms and groups */
-    snew(enerd, 1);
-    init_enerdata(top_global->groups.grps[egcENER].nr, ir->fepvals->n_lambda,
-                  enerd);
-
     /* Kinetic energy data */
     std::unique_ptr<gmx_ekindata_t> eKinData = std::make_unique<gmx_ekindata_t>();
     gmx_ekindata_t                 *ekind    = eKinData.get();
@@ -278,7 +270,7 @@ void gmx::Integrator::do_md()
                                  ir->nstcalcenergy, DOMAINDECOMP(cr));
 
     {
-        double io = compute_io(ir, top_global->natoms, groups, energyOutput.numEnergyTerms(), 1);
+        double io = compute_io(ir, top_global->natoms, *groups, energyOutput.numEnergyTerms(), 1);
         if ((io > 2000) && MASTER(cr))
         {
             fprintf(stderr,
@@ -286,11 +278,6 @@ void gmx::Integrator::do_md()
                     io);
         }
     }
-
-    /* Set up interactive MD (IMD) */
-    init_IMD(ir, cr, ms, top_global, fplog, ir->nstcalcenergy,
-             MASTER(cr) ? state_global->x.rvec_array() : nullptr,
-             nfile, fnm, oenv, mdrunOptions);
 
     // Local state only becomes valid now.
     std::unique_ptr<t_state> stateInstance;
@@ -306,7 +293,7 @@ void gmx::Integrator::do_md()
 
         /* Distribute the charge groups over the nodes from the master node */
         dd_partition_system(fplog, mdlog, ir->init_step, cr, TRUE, 1,
-                            state_global, *top_global, ir,
+                            state_global, *top_global, ir, imdSession,
                             state, &f, mdAtoms, &top, fr,
                             vsite, constr,
                             nrnb, nullptr, FALSE);
@@ -767,7 +754,7 @@ void gmx::Integrator::do_md()
                 /* Repartition the domain decomposition */
                 dd_partition_system(fplog, mdlog, step, cr,
                                     bMasterState, nstglobalcomm,
-                                    state_global, *top_global, ir,
+                                    state_global, *top_global, ir, imdSession,
                                     state, &f, mdAtoms, &top, fr,
                                     vsite, constr,
                                     nrnb, wcycle,
@@ -849,10 +836,10 @@ void gmx::Integrator::do_md()
             /* Now is the time to relax the shells */
             relax_shell_flexcon(fplog, cr, ms, mdrunOptions.verbose,
                                 enforcedRotation, step,
-                                ir, bNS, force_flags, &top,
+                                ir, imdSession, bNS, force_flags, &top,
                                 constr, enerd, fcd,
                                 state, f.arrayRefWithPadding(), force_vir, mdatoms,
-                                nrnb, wcycle, graph, groups,
+                                nrnb, wcycle, graph,
                                 shellfc, fr, ppForceWorkload, t, mu_tot,
                                 vsite,
                                 ddBalanceRegionHandler);
@@ -877,8 +864,8 @@ void gmx::Integrator::do_md()
              * This is parallellized as well, and does communication too.
              * Check comments in sim_util.c
              */
-            do_force(fplog, cr, ms, ir, awh.get(), enforcedRotation,
-                     step, nrnb, wcycle, &top, groups,
+            do_force(fplog, cr, ms, ir, awh.get(), enforcedRotation, imdSession,
+                     step, nrnb, wcycle, &top,
                      state->box, state->x.arrayRefWithPadding(), &state->hist,
                      f.arrayRefWithPadding(), force_vir, mdatoms, enerd, fcd,
                      state->lambda, graph,
@@ -1062,7 +1049,7 @@ void gmx::Integrator::do_md()
                                  mdrunOptions.writeConfout,
                                  bSumEkinhOld);
         /* Check if IMD step and do IMD communication, if bIMD is TRUE. */
-        bIMDstep = do_IMD(ir->bIMD, step, cr, bNS, state->box, state->x.rvec_array(), ir, t, wcycle);
+        bInteractiveMDstep = imdSession->run(step, bNS, state->box, state->x.rvec_array(), t);
 
         /* kludge -- virial is lost with restart for MTTK NPT control. Must reload (saved earlier). */
         if (startingFromCheckpoint && (inputrecNptTrotter(ir) || inputrecNphTrotter(ir)))
@@ -1431,7 +1418,7 @@ void gmx::Integrator::do_md()
         if ( (bExchanged || bNeedRepartition) && DOMAINDECOMP(cr) )
         {
             dd_partition_system(fplog, mdlog, step, cr, TRUE, 1,
-                                state_global, *top_global, ir,
+                                state_global, *top_global, ir, imdSession,
                                 state, &f, mdAtoms, &top, fr,
                                 vsite, constr,
                                 nrnb, wcycle, FALSE);
@@ -1479,7 +1466,7 @@ void gmx::Integrator::do_md()
                 nrnb, fr->pmedata, pme_loadbal, wcycle, walltime_accounting);
 
         /* If bIMD is TRUE, the master updates the IMD energy record and sends positions to VMD client */
-        IMD_prep_energies_send_positions(ir->bIMD && MASTER(cr), bIMDstep, ir->imd, enerd, step, bCalcEner, wcycle);
+        imdSession->updateEnergyRecordAndSendPositionsAndEnergies(bInteractiveMDstep, step, bCalcEner);
 
     }
     /* End of main MD loop */
@@ -1526,14 +1513,8 @@ void gmx::Integrator::do_md()
         finish_swapcoords(ir->swap);
     }
 
-    /* IMD cleanup, if bIMD is TRUE. */
-    IMD_finalize(ir->bIMD, ir->imd);
-
     walltime_accounting_set_nsteps_done(walltime_accounting, step_rel);
 
-    destroy_enerdata(enerd);
-
-    sfree(enerd);
     global_stat_destroy(gstat);
 
 }

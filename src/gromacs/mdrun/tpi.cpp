@@ -137,8 +137,6 @@ void
 Integrator::do_tpi()
 {
     gmx_localtop_t          top;
-    gmx_groups_t           *groups;
-    gmx_enerdata_t         *enerd;
     PaddedVector<gmx::RVec> f {};
     real                    lambda, t, temp, beta, drmax, epot;
     double                  embU, sum_embU, *sum_UgembU, V, V_all, VembU_all;
@@ -189,7 +187,7 @@ Integrator::do_tpi()
 
     gmx_mtop_generate_local_top(*top_global, &top, inputrec->efep != efepNO);
 
-    groups = &top_global->groups;
+    SimulationGroups *groups = &top_global->groups;
 
     bCavity = (inputrec->eI == eiTPIC);
     if (bCavity)
@@ -266,8 +264,6 @@ Integrator::do_tpi()
     atoms2md(top_global, inputrec, -1, nullptr, top_global->natoms, mdAtoms);
     update_mdatoms(mdatoms, inputrec->fepvals->init_lambda);
 
-    snew(enerd, 1);
-    init_enerdata(groups->grps[egcENER].nr, inputrec->fepvals->n_lambda, enerd);
     f.resizeWithPadding(top_global->natoms);
 
     /* Print to log file  */
@@ -350,7 +346,7 @@ Integrator::do_tpi()
         }
     }
 
-    ngid   = groups->grps[egcENER].nr;
+    ngid   = groups->groups[SimulationAtomGroupType::EnergyOutput].nr;
     gid_tp = GET_CGINFO_GID(fr->cginfo[cg_tp]);
     nener  = 1 + ngid;
     if (bDispCorr)
@@ -398,7 +394,7 @@ Integrator::do_tpi()
         for (i = 0; i < ngid; i++)
         {
             sprintf(str, "f. <U\\sVdW %s\\Ne\\S-\\betaU\\N>",
-                    *(groups->grpname[groups->grps[egcENER].nm_ind[i]]));
+                    *(groups->groupNames[groups->groups[SimulationAtomGroupType::EnergyOutput].nm_ind[i]]));
             leg[e++] = gmx_strdup(str);
         }
         if (bDispCorr)
@@ -411,7 +407,7 @@ Integrator::do_tpi()
             for (i = 0; i < ngid; i++)
             {
                 sprintf(str, "f. <U\\sCoul %s\\Ne\\S-\\betaU\\N>",
-                        *(groups->grpname[groups->grps[egcENER].nm_ind[i]]));
+                        *(groups->groupNames[groups->groups[SimulationAtomGroupType::EnergyOutput].nm_ind[i]]));
                 leg[e++] = gmx_strdup(str);
             }
             if (bRFExcl)
@@ -646,8 +642,8 @@ Integrator::do_tpi()
             // might raise, then restore the old behaviour.
             std::fenv_t floatingPointEnvironment;
             std::feholdexcept(&floatingPointEnvironment);
-            do_force(fplog, cr, ms, inputrec, nullptr, nullptr,
-                     step, nrnb, wcycle, &top, &top_global->groups,
+            do_force(fplog, cr, ms, inputrec, nullptr, nullptr, imdSession,
+                     step, nrnb, wcycle, &top,
                      state_global->box, state_global->x.arrayRefWithPadding(), &state_global->hist,
                      f.arrayRefWithPadding(), force_vir, mdatoms, enerd, fcd,
                      state_global->lambda,

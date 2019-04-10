@@ -168,9 +168,8 @@ def append_list(a: list = (), b: list = ()):
     # TODO: (FR3) Each sublist or sublist element could be a "future" handle;
     #  make sure input provider resolves that.
     # TODO: (FR4) Returned list should be an NDArray.
-    for arg in (a, b):
-        if isinstance(arg, (str, bytes)):
-            raise exceptions.ValueError('Input must be a pair of lists.')
+    if isinstance(a, (str, bytes)) or isinstance(b, (str, bytes)):
+        raise exceptions.ValueError('Input must be a pair of lists.')
     try:
         list_a = list(a)
     except TypeError:
@@ -197,10 +196,16 @@ def concatenate_lists(sublists: list = ()):
 
 @computed_result
 def make_constant(value):
-    """Create a source of the provided value.
+    """Provide a predetermined value at run time.
 
-    Accepts a value of any type. The object returned has a definite type.
+    This is a trivial operation that provides a (typed) value, primarily for
+    internally use to manage gmxapi data flow.
+
+    Accepts a value of any type. The object returned has a definite type and
+    provides same interface as other gmxapi outputs. Additional constraints or
+    guarantees on data type may appear in future versions.
     """
+    # TODO: (FR4+) Manage type compatibility with gmxapi data interfaces.
     return type(value)(value)
 
 

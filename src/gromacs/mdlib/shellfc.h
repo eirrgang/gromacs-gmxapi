@@ -46,7 +46,6 @@
 class DDBalanceRegionHandler;
 struct gmx_enerdata_t;
 struct gmx_enfrot;
-struct gmx_groups_t;
 struct gmx_multisim_t;
 struct gmx_shellfc_t;
 struct gmx_mtop_t;
@@ -59,6 +58,7 @@ class t_state;
 namespace gmx
 {
 class Constraints;
+class ImdSession;
 class PpForceWorkload;
 }
 
@@ -82,6 +82,7 @@ void relax_shell_flexcon(FILE                                     *log,
                          gmx_enfrot                               *enforcedRotation,
                          int64_t                                   mdstep,
                          const t_inputrec                         *inputrec,
+                         gmx::ImdSession                          *imdSession,
                          gmx_bool                                  bDoNS,
                          int                                       force_flags,
                          gmx_localtop_t                           *top,
@@ -95,7 +96,6 @@ void relax_shell_flexcon(FILE                                     *log,
                          t_nrnb                                   *nrnb,
                          gmx_wallcycle_t                           wcycle,
                          t_graph                                  *graph,
-                         const gmx_groups_t                       *groups,
                          gmx_shellfc_t                            *shfc,
                          t_forcerec                               *fr,
                          gmx::PpForceWorkload                     *ppForceWorkload,

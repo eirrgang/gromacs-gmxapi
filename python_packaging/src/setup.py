@@ -48,7 +48,7 @@
 # package from the directory containing setup.py, which may clutter that
 # directory with some artifacts.
 
-from setuptools import setup
+from skbuild import setup
 
 setup(
     name='gmxapi',
@@ -59,6 +59,8 @@ setup(
     setup_requires=['setuptools>=28'],
 
     packages=['gmxapi'],
+    cmake_args=['-DCMAKE_OSX_DEPLOYMENT_TARGET:STRING=10.9',
+                '-DCMAKE_OSX_ARCHITECTURES:STRING=x86_64'],
 
     author='M. Eric Irrgang',
     author_email='info@gmxapi.org',

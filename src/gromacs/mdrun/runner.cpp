@@ -75,6 +75,7 @@
 #include "gromacs/hardware/cpuinfo.h"
 #include "gromacs/hardware/detecthardware.h"
 #include "gromacs/hardware/printhardware.h"
+#include "gromacs/imd/imd.h"
 #include "gromacs/listed_forces/disre.h"
 #include "gromacs/listed_forces/gpubonded.h"
 #include "gromacs/listed_forces/orires.h"
@@ -84,6 +85,7 @@
 #include "gromacs/mdlib/boxdeformation.h"
 #include "gromacs/mdlib/broadcaststructs.h"
 #include "gromacs/mdlib/calc_verletbuf.h"
+#include "gromacs/mdlib/force.h"
 #include "gromacs/mdlib/forcerec.h"
 #include "gromacs/mdlib/gmx_omp_nthreads.h"
 #include "gromacs/mdlib/makeconstraints.h"
@@ -101,6 +103,7 @@
 #include "gromacs/mdrunutility/printtime.h"
 #include "gromacs/mdrunutility/threadaffinity.h"
 #include "gromacs/mdtypes/commrec.h"
+#include "gromacs/mdtypes/enerdata.h"
 #include "gromacs/mdtypes/fcdata.h"
 #include "gromacs/mdtypes/inputrec.h"
 #include "gromacs/mdtypes/md_enums.h"
@@ -165,7 +168,7 @@ static void threadMpiMdrunnerAccessBarrier()
 
 Mdrunner Mdrunner::cloneOnSpawnedThread() const
 {
-    auto newRunner = Mdrunner();
+    auto newRunner = Mdrunner(std::make_unique<MDModules>());
 
     // All runners in the same process share a restraint manager resource because it is
     // part of the interface to the client code, which is associated only with the
@@ -572,7 +575,6 @@ int Mdrunner::mdrunner()
 
     /* CAUTION: threads may be started later on in this function, so
        cr doesn't reflect the final parallel state right now */
-    std::unique_ptr<gmx::MDModules> mdModules(new gmx::MDModules);
     t_inputrec                      inputrecInstance;
     t_inputrec                     *inputrec = &inputrecInstance;
     gmx_mtop_t                      mtop;
@@ -696,17 +698,7 @@ int Mdrunner::mdrunner()
 
         if (inputrec->cutoff_scheme != ecutsVERLET)
         {
-            if (nstlist_cmdline > 0)
-            {
-                gmx_fatal(FARGS, "Can not set nstlist with the group cut-off scheme");
-            }
-
-            if (!compatibleGpus.empty())
-            {
-                GMX_LOG(mdlog.warning).asParagraph().appendText(
-                        "NOTE: GPU(s) found, but the current simulation can not use GPUs\n"
-                        "      To use a GPU, set the mdp option: cutoff-scheme = Verlet");
-            }
+            gmx_fatal(FARGS, "This group-scheme .tpr file can no longer be run by mdrun. Please update to the Verlet scheme, or use an earlier version of GROMACS if necessary.");
         }
     }
 
@@ -845,17 +837,17 @@ int Mdrunner::mdrunner()
     // TODO: hide restraint implementation details from Mdrunner.
     // There is nothing unique about restraints at this point as far as the
     // Mdrunner is concerned. The Mdrunner should just be getting a sequence of
-    // factory functions from the SimulationContext on which to call mdModules->add().
+    // factory functions from the SimulationContext on which to call mdModules_->add().
     // TODO: capture all restraints into a single RestraintModule, passed to the runner builder.
     for (auto && restraint : restraintManager_->getRestraints())
     {
         auto module = RestraintMDModule::create(restraint,
                                                 restraint->sites());
-        mdModules->add(std::move(module));
+        mdModules_->add(std::move(module));
     }
 
     // TODO: Error handling
-    mdModules->assignOptionsToModules(*inputrec->params, nullptr);
+    mdModules_->assignOptionsToModules(*inputrec->params, nullptr);
 
     if (fplog != nullptr)
     {
@@ -1325,7 +1317,7 @@ int Mdrunner::mdrunner()
     {
         /* Initiate forcerecord */
         fr                 = new t_forcerec;
-        fr->forceProviders = mdModules->initForceProviders();
+        fr->forceProviders = mdModules_->initForceProviders();
         init_forcerec(fplog, mdlog, fr, fcd,
                       inputrec, &mtop, cr, box,
                       opt2fn("-table", filenames.size(), filenames.data()),
@@ -1502,6 +1494,16 @@ int Mdrunner::mdrunner()
                                                    fplog, *mdAtoms->mdatoms(),
                                                    cr, ms, nrnb, wcycle, fr->bMolPBC);
 
+        /* Energy terms and groups */
+        gmx_enerdata_t *enerd;
+        snew(enerd, 1);
+        init_enerdata(mtop.groups.groups[SimulationAtomGroupType::EnergyOutput].nr, inputrec->fepvals->n_lambda, enerd);
+
+        /* Set up interactive MD (IMD) */
+        auto imdSession = makeImdSession(inputrec, cr, wcycle, enerd, ms, &mtop, mdlog,
+                                         MASTER(cr) ? globalState->x.rvec_array() : nullptr,
+                                         filenames.size(), filenames.data(), oenv, mdrunOptions);
+
         if (DOMAINDECOMP(cr))
         {
             GMX_RELEASE_ASSERT(fr, "fr was NULL while cr->duty was DUTY_PP");
@@ -1529,12 +1531,13 @@ int Mdrunner::mdrunner()
             vsite.get(), constr.get(),
             enforcedRotation ? enforcedRotation->getLegacyEnfrot() : nullptr,
             deform.get(),
-            mdModules->outputProvider(),
-            inputrec, &mtop,
+            mdModules_->outputProvider(),
+            inputrec, imdSession.get(), &mtop,
             fcd,
             globalState.get(),
             &observablesHistory,
             mdAtoms.get(), nrnb, wcycle, fr,
+            enerd,
             &ppForceWorkload,
             replExParams,
             membed,
@@ -1547,7 +1550,8 @@ int Mdrunner::mdrunner()
         {
             finish_pull(inputrec->pull_work);
         }
-
+        destroy_enerdata(enerd);
+        sfree(enerd);
     }
     else
     {
@@ -1571,7 +1575,7 @@ int Mdrunner::mdrunner()
     // clean up cycle counter
     wallcycle_destroy(wcycle);
 
-    // Free PME data
+// Free PME data
     if (pmedata)
     {
         gmx_pme_destroy(pmedata);
@@ -1584,13 +1588,13 @@ int Mdrunner::mdrunner()
     // As soon as we destroy GPU contexts after mdrunner() exits, these lines should go.
     mdAtoms.reset(nullptr);
     globalState.reset(nullptr);
-    mdModules.reset(nullptr);   // destruct force providers here as they might also use the GPU
+    mdModules_.reset(nullptr);   // destruct force providers here as they might also use the GPU
 
     /* Free GPU memory and set a physical node tMPI barrier (which should eventually go away) */
     free_gpu_resources(fr, physicalNodeComm);
     free_gpu(nonbondedDeviceInfo);
     free_gpu(pmeDeviceInfo);
-    done_forcerec(fr, mtop.molblock.size(), mtop.groups.grps[egcENER].nr);
+    done_forcerec(fr, mtop.molblock.size(), mtop.groups.groups[SimulationAtomGroupType::EnergyOutput].nr);
     sfree(fcd);
 
     if (doMembed)
@@ -1662,6 +1666,11 @@ void Mdrunner::addPotential(std::shared_ptr<gmx::IRestraintPotential> puller,
                                  std::move(name));
 }
 
+Mdrunner::Mdrunner(std::unique_ptr<MDModules> mdModules)
+    : mdModules_(std::move(mdModules))
+{
+}
+
 Mdrunner::Mdrunner(Mdrunner &&) noexcept = default;
 
 //NOLINTNEXTLINE(performance-noexcept-move-constructor) working around GCC bug 58265
@@ -1671,7 +1680,8 @@ class Mdrunner::BuilderImplementation
 {
     public:
         BuilderImplementation() = delete;
-        explicit BuilderImplementation(SimulationContext* context);
+        BuilderImplementation(std::unique_ptr<MDModules> mdModules,
+                              SimulationContext        * context);
         ~BuilderImplementation();
 
         BuilderImplementation &setExtraMdrunOptions(const MdrunOptions &options,
@@ -1704,6 +1714,7 @@ class Mdrunner::BuilderImplementation
         Mdrunner build();
 
     private:
+
         // Default parameters copied from runner.h
         // \todo Clarify source(s) of default parameters.
 
@@ -1726,6 +1737,9 @@ class Mdrunner::BuilderImplementation
 
         //! Print a warning if any force is larger than this (in kJ/mol nm).
         real forceWarningThreshold_ = -1;
+
+        //! The modules that comprise the functionality of mdrun.
+        std::unique_ptr<MDModules> mdModules_;
 
         /*! \brief  Non-owning pointer to SimulationContext (owned and managed by client)
          *
@@ -1766,7 +1780,9 @@ class Mdrunner::BuilderImplementation
         std::unique_ptr<StopHandlerBuilder> stopHandlerBuilder_ = nullptr;
 };
 
-Mdrunner::BuilderImplementation::BuilderImplementation(SimulationContext* context) :
+Mdrunner::BuilderImplementation::BuilderImplementation(std::unique_ptr<MDModules> mdModules,
+                                                       SimulationContext        * context) :
+    mdModules_(std::move(mdModules)),
     context_(context)
 {
     GMX_ASSERT(context_, "Bug found. It should not be possible to construct builder without a valid context.");
@@ -1805,7 +1821,7 @@ void Mdrunner::BuilderImplementation::addMultiSim(gmx_multisim_t* multisim)
 
 Mdrunner Mdrunner::BuilderImplementation::build()
 {
-    auto newRunner = Mdrunner();
+    auto newRunner = Mdrunner(std::move(mdModules_));
 
     GMX_ASSERT(context_, "Bug found. It should not be possible to call build() without a valid context.");
 
@@ -1933,8 +1949,9 @@ void Mdrunner::BuilderImplementation::addStopHandlerBuilder(std::unique_ptr<Stop
     stopHandlerBuilder_ = std::move(builder);
 }
 
-MdrunnerBuilder::MdrunnerBuilder(compat::not_null<SimulationContext*> context) :
-    impl_ {std::make_unique<Mdrunner::BuilderImplementation>(context)}
+MdrunnerBuilder::MdrunnerBuilder(std::unique_ptr<MDModules>           mdModules,
+                                 compat::not_null<SimulationContext*> context) :
+    impl_ {std::make_unique<Mdrunner::BuilderImplementation>(std::move(mdModules), context)}
 {
 }
 
