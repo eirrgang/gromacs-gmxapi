@@ -42,13 +42,15 @@ __all__ = ['commandline_operation',
 
 import os
 
-from gmxapi import exceptions
-from gmxapi import operation
-from gmxapi._logging import logger
-from gmxapi.commandline import commandline_operation
-from gmxapi.datamodel import ndarray
-from gmxapi.operation import read_tpr
-from gmxapi import _gmxapi
+from . import exceptions
+from . import operation
+from ._logging import logger
+from .commandline import commandline_operation
+from .context import ContextCharacteristics as ContextCharacteristics
+from .context import get_context
+from .datamodel import ndarray
+# from .operation import read_tpr
+from . import _gmxapi
 
 
 def mdrun(input=None):

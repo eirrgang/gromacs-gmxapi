@@ -193,7 +193,7 @@ def filemap_to_flag_list(filemap=None):
     if filemap is not None:
         for flag, value in filemap.items():
             flag_list.extend((flag, value))
-    # TODO: (FR4) Should be a NDArray(shape=(1,), dtype=str)
+    # TODO: (FR4) Should be a NDArray(shape=(X,), dtype=str)
     return flag_list
 
 

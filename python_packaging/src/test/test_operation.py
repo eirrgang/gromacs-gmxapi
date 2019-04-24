@@ -60,10 +60,9 @@ class ImmediateResultTestCase(unittest.TestCase):
     def test_list(self):
         list_a = [1, 2, 3]
 
-        # TODO: (FR4) test input validation
+        # TODO: test input validation
         list_result = gmx.operation.concatenate_lists(sublists=[list_a])
-        # TODO: (FR4) should be NDArray
-        assert list_result.dtype == type(list_a)
+        assert list_result.dtype == gmx.datamodel.NDArray
         # Note: this is specifically for the built-in tuple type.
         # Equality comparison may work differently for different sequence types.
         assert tuple(list_result.result()) == tuple(list_a)
@@ -78,7 +77,7 @@ class ImmediateResultTestCase(unittest.TestCase):
         list_result = gmx.operation.concatenate_lists(sublists=[list_b])
         assert list_result.result()[0] == 42
 
-        list_result = gmx.operation.append_list(list_a, list_b)
+        list_result = gmx.operation.join_arrays(list_a, list_b)
         assert len(list_result.result()) == len(list_a) + 1
         assert tuple(list_result.result()) == tuple(list(list_a) + [42])
 
