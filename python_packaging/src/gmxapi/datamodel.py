@@ -43,16 +43,12 @@ accompanied by C struct descriptors. ABI compatibility relies on these C structs
 and the accompanying Python Capsule schema.
 """
 
-__all__ = ['ndarray']
+# __all__ = ['ndarray']
 
-import abc
 import collections
-from collections.abc import Iterable, Mapping, Sequence, Sized
-from enum import Enum, auto
-import inspect
-import typing
 
 from gmxapi import exceptions
+
 
 # class GmxapiDataType(Enum):
 #     Boolean = auto()
@@ -160,6 +156,7 @@ class NDArray(object):
     TODO: Provide __class_getitem__ for subscripted type specification?
     TODO: Provide gmxapi Any type for TypeVar type placeholders? (ref typing module)
     """
+
     def __init__(self, data=None):
         self.values = []
         self.dtype = None
@@ -182,6 +179,7 @@ class NDArray(object):
 
     def to_list(self):
         return self.values
+
 
 #
 # class AssociativeArray(GmxapiDataHandle):
@@ -266,6 +264,7 @@ class NDArray(object):
 
 class ResultDescription:
     """Describe what will be returned when `result()` is called."""
+
     def __init__(self, dtype=None, width=1):
         assert isinstance(dtype, type)
         assert issubclass(dtype, (str, bool, int, float, dict, NDArray))
@@ -284,167 +283,79 @@ class ResultDescription:
         return self._width
 
 
-class OutputCollectionDescription(object):
+class DataSourceCollection(collections.OrderedDict):
+    """Store and describe input data handles for an operation.
+
+
+    """
+
     def __init__(self, **kwargs):
-        """Create the output description for an operation node from a dictionary of names and types."""
-        self._outputs = {}
-        for name, flavor in kwargs.items():
+        """Initialize from key/value pairs of named data sources.
+
+        Data sources may be any of the basic gmxapi data types, gmxapi Futures
+        of those types, or gmxapi ensemble data bundles of the above.
+
+        Note that the checking and conditioning could be moved to one or more
+        creation functions. In conjunction with an InputCollectionDescription,
+        such creation functions could make decisions about automatically shaping
+        the data flow topology or making conversions of data type or shape.
+        """
+        named_data = []
+        for name, value in kwargs.items():
             if not isinstance(name, str):
-                raise exceptions.TypeError('Output descriptions are keyed by Python strings.')
-            # Multidimensional outputs are explicitly NDArray
-            if issubclass(flavor, (list, tuple)):
-                flavor = NDArray
-            assert issubclass(flavor, (str, bool, int, float, dict, NDArray))
-            self._outputs[name] = flavor
+                raise exceptions.TypeError('Data must be named with str type.')
 
-    def items(self):
-        return self._outputs.items()
-
-    def __getitem__(self, item):
-        return self._outputs[item]
+            named_data.append((name, value))
+        super().__init__(named_data)
 
 
-class FunctionWrapper(object):
-    """Tool to manage a wrapped function with a standard interface.
+class DataEdge(object):
+    """State and description of a data flow edge.
 
-    Provides the following functionality:
-    * get the input names and types
-    * get the output names and types
-    * get a runner with the standard signature
-    * build a Resources object to pass to the runner
+    A DataEdge connects a data source collection to a data sink. A sink is an
+    input or collection of inputs of an operation (or fused operation). An operation's
+    inputs may be fed from multiple data source collections, but an operation
+    cannot be fully instantiated until all of its inputs are bound, so the DataEdge
+    is instantiated at the same time the operation is instantiated because the
+    required topology of a graph edge may be determined by the required topology
+    of another graph edge.
 
-    Can handle several sorts of function signatures.
-    * named keyword inputs
-    * output through a publisher passed with the `output` keyword argument
-    * output through capture of the return value
+    A data edge has a well-defined topology only when it is terminated by both
+    a source and sink. Creation requires that a source collection is compared to
+    a sink description.
+
+    Calling code initiates edge creation by passing well-described data sources
+    to an operation factory. The data sources may be annotated with explicit scatter
+    or gather commands.
+
+    The resource manager for the new operation determines the
+    required shape of the sink to handle all of the offered input.
+
+    Broadcasting
+    and transformations of the data sources are then determined and the edge is
+    established.
+
+    At that point, the fingerprint of the input data at each operation
+    becomes available to the resource manager for the operation. The fingerprint
+    has sufficient information for the resource manager of the operation to
+    request and receive data through the execution context.
+
+    Instantiating operations and data edges implicitly involves collaboration with
+    a Context instance. The state of a given Context or the availability of a
+    default Context through a module function may affect the ability to instantiate
+    an operation or edge. In other words, behavior may be different for connections
+    being made in the scripting environment versus the running Session, and implementation
+    details can determine whether or not new operations or data flow can occur in
+    different code environments.
     """
-    @classmethod
-    def from_pyfunc(cls, function):
-        """Initialize an operation input description from a Python callable.
 
-        Handles a few different use cases. The function should be a Python callable
-        with an inspectable signature (see `inspect` built-in module).
+    def sink(self, terminal):
+        """Consume data for the specified sink terminal.
+
+        Run-time utility delivers data from the bound data source(s) for the
+        specified terminal that was configured when the edge was created.
         """
-        try:
-            signature = inspect.signature(function)
-        except TypeError as T:
-            raise exceptions.ApiError('Can not inspect type of provided function argument.') from T
-        except ValueError as V:
-            raise exceptions.ApiError('Can not inspect provided function signature.') from V
-        # Note: Introspection could fail.
-        # Note: ApiError indicates a bug because we should handle this more intelligently.
-        # TODO: Figure out what to do with exceptions where this introspection
-        #  and rebinding won't work.
-        # ref: https://docs.python.org/3/library/inspect.html#introspecting-callables-with-the-signature-object
-
-        wrapped_function = cls()
-        if 'output' in signature.parameters:
-            # Output will be published through the publisher passed when the function is called.
-            wrapped_function.runner_captures_return_value = False
-
-        else:
-            # Output will be captured from the return value
-            wrapped_function.runner_captures_return_value = True
-
-
-class BoundInput(object):
-    pass
-
-
-class OutputCollection(object):
-    pass
-
-
-class InputCollection(object):
-    """A collection of named data inputs for an operation.
-
-    An instance of InputCollection allows type-checking when binding data
-    sources to an operation as operation is initialized. An operation type has
-    a well-defined InputCollection. An operation instance must have bound data
-    sources of valid type.
-
-    TODO: We can use a parameterized factory (decorator factory function) to
-     dynamically define an InputCollection class for a signature.
-    """
-    def __init__(self, signature):
-        parameters = []
-        for name, parameter in signature.parameters.items():
-            if parameter.annotation is parameter.empty:
-                if parameter.default is parameter.empty:
-                    raise exceptions.ProtocolError('Cannot determine type for input {}.'.format(name))
-                else:
-                    parameters.append(parameter.replace(annotation=type(parameter.default)))
-            else:
-                #This can't work for things like "make_constant" that don't know the type until they are instantiated...
-                # if not isinstance(parameter.annotation, type):
-                #     raise exceptions.ProtocolError('gmxapi parameters must have type annotations.')
-                parameters.append(parameter)
-        for i, parameter in enumerate(parameters):
-            if not isinstance(parameter.annotation, (str, bytes)):
-                if isinstance(parameter.annotation, type) and issubclass(parameter.annotation, typing.Iterable):
-                    parameters[i] = parameter.replace(annotation=NDArray)
-        self.signature = signature
-        self.parameters = parameters
-        self._input_pack = None
-
-    def bind(self, *args, **kwargs):
-        """Bind the provided positional and keyword arguments.
-        """
-        # Check the provided value
-        input_pack = {}
-
-        def arg_iterator():
-            for i, arg in enumerate(args):
-                yield (self.parameters[i].name, arg)
-            for key, value in kwargs.items():
-                yield (key, value)
-        i = 0
-        for name, arg in arg_iterator():
-            param = self.parameters[i]
-            assert name == param.name
-            i += 1
-
-            ptype = param.annotation
-            if ptype == NDArray:
-                if isinstance(arg, NDArray):
-                    input_pack[name] = arg
-                elif isinstance(arg, typing.Iterable) and not isinstance(arg, (str, bytes)):
-                    input_pack[name] = arg
-                elif hasattr(arg, 'result'):
-                    assert hasattr(arg, 'dtype')
-                    if arg.dtype != NDArray:
-                        if not issubclass(arg.dtype, typing.Iterable):
-                            raise exceptions.TypeError('Expected array. Got {} of type {}'.format(arg, arg.dtype))
-                    input_pack[name] = arg
-                else:
-                    raise exceptions.TypeError('Expected NDArray, but got {} of type {}'.format(arg, type(arg)))
-            else:
-                if isinstance(arg, typing.Iterable) and not isinstance(arg, (str, bytes)):
-                    raise exceptions.ApiError('Ensemble inputs not yet supported.')
-                elif hasattr(arg, 'result'):
-                    assert hasattr(arg, 'dtype')
-                    assert arg.dtype == ptype
-                    input_pack[name] = arg
-                else:
-                    if callable(ptype):
-                        input_pack[name] = ptype(arg)
-                    else:
-                        input_pack[name] = arg
-        self._input_pack = input_pack
-
-    def input_pack(self, member=0):
-        """Get the bound input pack for the operation.
-
-        If the bound operation is an ensemble operation, get the input pack for
-        the `member`th ensemble member (default 0).
-        """
-        for name, arg in self._input_pack.items():
-            if hasattr(arg, 'result'):
-                self._input_pack[name] = arg.result()
-            if isinstance(arg, NDArray):
-                self._input_pack[name] = arg.values
-        pack = self.signature.bind(**self._input_pack)
-        return pack
+        # TODO NOOOOW
 
 
 def ndarray(data=None):

@@ -42,10 +42,10 @@ from gmxapi.version import has_feature
 
 @pytest.mark.skipif(not has_feature('fr4'),
                     reason="Feature level not met.")
-def test_fr4():
+def test_fr4(spc216):
     """FR4: Dimensionality and typing of named data causes generation of correct work topologies."""
     N = 10
-    simulation_input = gmx.read_tpr(initial_tpr)
+    simulation_input = gmx.read_tpr(spc216)
 
     # Array inputs imply array outputs.
     input_array = gmx.modify_input(

@@ -42,8 +42,9 @@ import subprocess
 
 from gmxapi import exceptions
 from gmxapi import logger as root_logger
-from gmxapi.datamodel import OutputCollection
-from gmxapi.operation import function_wrapper, concatenate_lists, make_constant
+from gmxapi.datamodel import NDArray
+from gmxapi.operation import concatenate_lists, function_wrapper, Future, join_arrays, make_constant, \
+    OutputCollectionDescription
 
 # Module-level logger
 logger = root_logger.getChild(__name__)
@@ -68,7 +69,7 @@ logger.info('Importing gmxapi.commandline_operation')
 # TODO: Operation returns the output object when called with the shorter signature.
 #
 @function_wrapper(output={'erroroutput': str, 'returncode': int})
-def cli(command: list = None, shell: bool = None, output: OutputCollection = None):
+def cli(command: NDArray = (), shell: bool = None, output: OutputCollectionDescription = None):
     """Execute a command line program in a subprocess.
 
     Configure an executable in a subprocess. Executes when run in an execution
@@ -173,7 +174,7 @@ def cli(command: list = None, shell: bool = None, output: OutputCollection = Non
 # TODO: (FR4) Make this a formal operation to properly handle gmxapi data dependencies.
 #  The consumer of this operation has an NDArray input. filemap may contain gmxapi data flow
 #  aspects that we want the framework to handle for us.
-def filemap_to_flag_list(filemap=None):
+def filemap_to_flag_list(filemap: dict = None):
     """Convert a map of command line flags and filenames to a list of command line arguments.
 
     Used to map inputs and outputs of command line tools to and from gmxapi data handles.
@@ -189,12 +190,17 @@ def filemap_to_flag_list(filemap=None):
     Returns:
         list of strings and/or gmxapi data references
     """
-    flag_list = []
+    result = []
     if filemap is not None:
-        for flag, value in filemap.items():
-            flag_list.extend((flag, value))
-    # TODO: (FR4) Should be a NDArray(shape=(X,), dtype=str)
-    return flag_list
+        for key, value in filemap.items():
+            # Note that the value may be a string, a list, an ndarray, or a future
+            if not isinstance(value, (list, tuple, NDArray)):
+                if isinstance(value, Future) and value.dtype == NDArray:
+                    pass
+                else:
+                    value = [value]
+            result = join_arrays(a=result, b=join_arrays(a=[key], b=value))
+    return result
 
 
 # TODO: (FR4) Use generating function or decorator that can validate kwargs?
@@ -238,8 +244,10 @@ def commandline_operation(executable=None,
     # output_files is essentially passed through, but we need assurance that results
     # will not be published until the rest of the operation has run (i.e. the cli() executable.)
 
+    # TODO: (FR4+) Characterize the dictionary key type: explicitly sequences rather than maybe-string/maybe-sequence-of-strings
     @function_wrapper(output={'erroroutput': str, 'returncode': int, 'file': dict})
-    def merged_ops(erroroutput: str = None, returncode: int = None, file: dict = None, output: OutputCollection = None):
+    def merged_ops(erroroutput: str = None, returncode: int = None, file: dict = None,
+                   output: OutputCollectionDescription = None):
         assert erroroutput is not None
         assert returncode is not None
         assert file is not None

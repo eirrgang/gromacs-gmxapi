@@ -131,6 +131,39 @@ Input argument is assumed to be an ensemble of values if it
 Note: This implies that numpy.ndarray requires explicit wrapping to avoid being
 considered as ensemble input.
 
+Consider
+--------
+
+1. All data has a shape.
+2. Inputs can constrain their shape (zero-dimensions for scalar) with a type hint, default value, or decorator. Individual dimensions can be constrained to a fixed size or left unconstrained.
+3. Automatically, data sources and sinks try to make a best match that minimizes the edge dimensionality. Ensemble dimension may be increased to allow implicit scatter or map. Implicit broadcast may occur to satisfy topology but will _not_ occur to fill an explicitly sized dimension of a sink. This means that, in two steps, data source and sink shape are inspected to determine the necessary topology, then implicit scatter or broadcast occurs. Implicit gather never occurs.
+4. The automatic edge shape can be overridden. `scatter()` converts the outermost (non-ensemble?) dimension to an ensemble dimension or broadcasts where necessary. `gather()` converts the outermost ensemble dimension to a local data dimension, broadcasting (instead of implicitly scattering) to satisfy edge topology if necessary.
+
+Note: this implies there is a distinction between a data source, a collection of data sources, and an edge fed by a data source collection.
+
+Clarify: How do the various shapes of data in a collection affect their shapes in the resulting edge?
+Clarify / confirm: scatter and gather should probably always have an effect even if it breaks data shape compatibility while an implicit operation would not.
+
+Annotations: Data is represented by numpy-like gmxapi data handles with dimensionality. NDArray becomes an abstract base class for annotation, type hinting, and type checking.
+
+Observation: The introspection of sink shape means this proposal calls for avoidance of ensemble creation in cases where we previously might have aggressively created ensembles.
+
+Consider
+--------
+
+Do operation handles need output attributes to provide a safe namespace or do
+we just work out namespace conflict avoidance and have some reserved words?
+
+Proposed reserved words for input and output names: ``input``, ``output``, ``context``, ``run``, ``result``, ``dtype``
+
+Furthermore, we can consider allowing unnamed outputs when output is singular or a collection type.
+
+Keeping with the principle "there should be one, and preferably only one, obvious way to do something," we should prefer either
+collection behavior (sized, iterable...) or aggregate type / namespace-like behavior with named attributes.
+The latter is more like the statically-typed data ports we expect in C++ and is friendly to tab-completion and object inspection,
+but means that it is a little inconsistent to implement __getitem__. However, it would seem fine to have member functions
+that produce helpful views, such as ``outputs()``, ``inputs()``.
+
 Operation implementation
 ------------------------
 

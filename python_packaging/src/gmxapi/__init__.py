@@ -35,6 +35,7 @@
 """gmxapi Python package for GROMACS."""
 
 __all__ = ['commandline_operation',
+            'datamodel',
            'exceptions',
            'logger',
            'operation',
@@ -42,14 +43,15 @@ __all__ = ['commandline_operation',
 
 import os
 
+from ._logging import logger
+from . import datamodel
 from . import exceptions
 from . import operation
-from ._logging import logger
 from .commandline import commandline_operation
 from .context import ContextCharacteristics as ContextCharacteristics
 from .context import get_context
 from .datamodel import ndarray
-# from .operation import read_tpr
+from .operation import read_tpr
 from . import _gmxapi
 
 
