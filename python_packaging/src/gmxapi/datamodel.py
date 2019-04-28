@@ -283,6 +283,17 @@ class ResultDescription:
         return self._width
 
 
+class EnsembleDataSource(object):
+    """A single source of data with ensemble data flow annotations."""
+    def __init__(self):
+        self.source = None
+        self.width = 1
+        self.dtype = None
+
+    def node(self, member: int):
+        return self.source[member]
+
+
 class DataSourceCollection(collections.OrderedDict):
     """Store and describe input data handles for an operation.
 
@@ -304,58 +315,12 @@ class DataSourceCollection(collections.OrderedDict):
         for name, value in kwargs.items():
             if not isinstance(name, str):
                 raise exceptions.TypeError('Data must be named with str type.')
-
+            if not isinstance(value, (str, bool, int, float, dict, NDArray, EnsembleDataSource)):
+                if isinstance(value, collections.abc.Iterable):
+                    # Note: Here we assume that iterables are arrays first and ensemble data if necessary.
+                    value = ndarray(value)
             named_data.append((name, value))
         super().__init__(named_data)
-
-
-class DataEdge(object):
-    """State and description of a data flow edge.
-
-    A DataEdge connects a data source collection to a data sink. A sink is an
-    input or collection of inputs of an operation (or fused operation). An operation's
-    inputs may be fed from multiple data source collections, but an operation
-    cannot be fully instantiated until all of its inputs are bound, so the DataEdge
-    is instantiated at the same time the operation is instantiated because the
-    required topology of a graph edge may be determined by the required topology
-    of another graph edge.
-
-    A data edge has a well-defined topology only when it is terminated by both
-    a source and sink. Creation requires that a source collection is compared to
-    a sink description.
-
-    Calling code initiates edge creation by passing well-described data sources
-    to an operation factory. The data sources may be annotated with explicit scatter
-    or gather commands.
-
-    The resource manager for the new operation determines the
-    required shape of the sink to handle all of the offered input.
-
-    Broadcasting
-    and transformations of the data sources are then determined and the edge is
-    established.
-
-    At that point, the fingerprint of the input data at each operation
-    becomes available to the resource manager for the operation. The fingerprint
-    has sufficient information for the resource manager of the operation to
-    request and receive data through the execution context.
-
-    Instantiating operations and data edges implicitly involves collaboration with
-    a Context instance. The state of a given Context or the availability of a
-    default Context through a module function may affect the ability to instantiate
-    an operation or edge. In other words, behavior may be different for connections
-    being made in the scripting environment versus the running Session, and implementation
-    details can determine whether or not new operations or data flow can occur in
-    different code environments.
-    """
-
-    def sink(self, terminal):
-        """Consume data for the specified sink terminal.
-
-        Run-time utility delivers data from the bound data source(s) for the
-        specified terminal that was configured when the edge was created.
-        """
-        # TODO NOOOOW
 
 
 def ndarray(data=None):

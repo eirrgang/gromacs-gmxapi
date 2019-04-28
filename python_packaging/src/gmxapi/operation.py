@@ -63,9 +63,8 @@ from contextlib import contextmanager
 from typing import TypeVar
 
 import gmxapi as gmx
-from gmxapi import exceptions
-from gmxapi.datamodel import *
 from gmxapi import logger as root_logger
+from gmxapi.datamodel import *
 
 # Initialize module-level logger
 logger = root_logger.getChild(__name__)
@@ -95,6 +94,7 @@ def computed_result(function):
         raise exceptions.ApiError('Can not inspect type of provided function argument.') from T
     except ValueError as V:
         raise exceptions.ApiError('Can not inspect provided function signature.') from V
+
     # Note: Introspection could fail.
     # Note: ApiError indicates a bug because we should handle this more intelligently.
     # TODO: Figure out what to do with exceptions where this introspection
@@ -219,6 +219,7 @@ class InputCollectionDescription(collections.OrderedDict):
     function input. The object returned from bind() is used to construct a data
     graph Edge for subsequent execution.
     """
+
     def __init__(self, **parameters):
         """Create the input description for an operation node from a dictionary of names and types."""
         inputs = []
@@ -323,12 +324,13 @@ class InputCollectionDescription(collections.OrderedDict):
                 # Note: we have also been allowing arguments with a `run` attribute to be used as execution dependencies, but we should probably stop that.
                 if hasattr(provided_input, 'run'):
                     execution_dependencies.append(provided_input)
+                    # Note that execution_dependencies is not used after this point.
                 else:
                     input_kwargs.update(provided_input)
         # `function` may accept an `output` keyword argument that should not be supplied to the factory.
         for key, value in kwargs.items():
             if key == 'output':
-                raise exceptions.UsageError('Invalid keyword argument: output.')
+                raise exceptions.UsageError('Invalid keyword argument: output (reserved).')
             input_kwargs[key] = value
         try:
             bound_arguments = self.signature.bind_partial(*args, **input_kwargs)
@@ -341,6 +343,42 @@ class InputCollectionDescription(collections.OrderedDict):
         if 'output' in input_kwargs:
             input_kwargs.pop('output')
         return DataSourceCollection(**input_kwargs)
+
+
+class DataProxyBase(object):
+    """Limited interface to managed resources.
+
+    Inherit from DataProxy to specialize an interface to an ``instance``.
+    In the derived class, either do not define ``__init__`` or be sure to
+    initialize the super class (DataProxy) with an instance of the object
+    to be proxied.
+
+    Acts as an owning handle to ``instance``, preventing the reference count
+    of ``instance`` from going to zero for the lifetime of the proxy object.
+    """
+
+    # This class can be expanded to be the attachment point for a metaclass for
+    # data proxies such as PublishingDataProxy or OutputDataProxy, which may be
+    # defined very dynamically and concisely as a set of Descriptors and a type()
+    # call.
+    # If development in this direction does not materialize, then this base
+    # class is not very useful and should be removed.
+    def __init__(self, instance, client_id: int = None):
+        """Get partial ownership of a resource provider.
+
+        Arguments:
+            instance : resource-owning object
+            client_id : identifier for client holding the resource handle (e.g. ensemble member id)
+
+        If client_id is not provided, the proxy scope is for all clients.
+        """
+        # Developer note subclasses should handle self._client_identifier == None
+        self._resource_instance = instance
+        self._client_identifier = client_id
+
+    @property
+    def ensemble_width(self):
+        return self._resource_instance.ensemble_width
 
 
 class Publisher(object):
@@ -368,45 +406,32 @@ class Publisher(object):
         # self._instance = instance
         self.name = name
 
-    def __get__(self, instance, owner):
+    def __get__(self, instance: DataProxyBase, owner):
         if instance is None:
             # Access through class attribute of owner class
             return self
-        resource_manager = instance._instance
-        return getattr(resource_manager._data, self.name)
+        resource_manager = instance._resource_instance
+        client_id = instance._client_identifier
+        if client_id is None:
+            return getattr(resource_manager._data, self.name)
+        else:
+            return getattr(resource_manager._data, self.name)[client_id]
 
-    def __set__(self, instance, value):
-        resource_manager = instance._instance
-        resource_manager.set_result(self.name, value)
+    def __set__(self, instance: DataProxyBase, value):
+        resource_manager = instance._resource_instance
+        client_id = instance._client_identifier
+        resource_manager.set_result(name=self.name, value=value, member=client_id)
 
     def __repr__(self):
         return 'Publisher(name={}, dtype={})'.format(self.name, self.dtype.__qualname__)
 
 
-class DataProxyBase(object):
-    """Limited interface to managed resources.
-
-    Inherit from DataProxy to specialize an interface to an ``instance``.
-    In the derived class, either do not define ``__init__`` or be sure to
-    initialize the super class (DataProxy) with an instance of the object
-    to be proxied.
-
-    Acts as an owning handle to ``instance``, preventing the reference count
-    of ``instance`` from going to zero for the lifetime of the proxy object.
-    """
-
-    # This class can be expanded to be the attachment point for a metaclass for
-    # data proxies such as PublishingDataProxy or OutputDataProxy, which may be
-    # defined very dynamically and concisely as a set of Descriptors and a type()
-    # call.
-    # If development in this direction does not materialize, then this base
-    # class is not very useful and should be removed.
-    def __init__(self, instance):
-        self._instance = instance
-
-
 def define_publishing_data_proxy(output_description):
     """Returns a class definition for a PublishingDataProxy for the provided output description."""
+    # This dynamic type creation hides collaborations with things like make_datastore.
+    # We should encapsulate these relationships in Context details, explicit collaborations
+    # between specific operations and Contexts, and in groups of Operation definition helpers.
+
     # Dynamically define a type for the PublishingDataProxy using a descriptor for each attribute.
     # TODO: Encapsulate this bit of script in a metaclass definition?
     namespace = {}
@@ -436,10 +461,7 @@ class ResultGetter(object):
         assert self.resource_manager._data[self.name].done
         # Return ownership of concrete data
         handle = self.resource_manager._data[self.name]
-        if handle._description.dtype == NDArray:
-            return handle.data.values
-        else:
-            return handle.data
+        return handle.data
 
 
 class Future(object):
@@ -487,12 +509,12 @@ class OutputDescriptor(object):
         assert issubclass(dtype, (str, bool, int, float, dict, NDArray))
         self.dtype = dtype
 
-    def __get__(self, proxy, owner):
+    def __get__(self, proxy: DataProxyBase, owner):
         if proxy is None:
             # Access through class attribute of owner class
             return self
-        result_description = gmx.datamodel.ResultDescription(dtype=self.dtype, width=1)
-        return proxy._instance.future(name=self.name, description=result_description)
+        result_description = gmx.datamodel.ResultDescription(dtype=self.dtype, width=proxy.ensemble_width)
+        return proxy._resource_instance.future(name=self.name, description=result_description)
 
 
 def define_output_data_proxy(output_description: OutputCollectionDescription):
@@ -531,36 +553,217 @@ PyFuncInput = collections.namedtuple('Input', ('args', 'kwargs', 'dependencies')
 
 # Encapsulate the description and storage of a data output.
 class OutputData(object):
-    def __init__(self, name: str = '', description: gmx.datamodel.ResultDescription = None):
+    def __init__(self, name: str, description: gmx.datamodel.ResultDescription):
         assert name != ''
         self._name = name
         assert isinstance(description, gmx.datamodel.ResultDescription)
         self._description = description
-        self._done = False
-        self._data = None
+        self._done = [False] * self._description.width
+        self._data = [None] * self._description.width
 
     @property
     def name(self):
         return self._name
 
+    # TODO: Change to regular member function and add ensemble member arg.
     @property
     def done(self):
-        return self._done
+        return all(self._done)
 
+    # TODO: Change to regular member function and add ensemble member arg.
     @property
     def data(self):
         if not self.done:
             raise exceptions.ApiError('Attempt to read before data has been published.')
-        if self._data is None:
+        if self._data is None or None in self._data:
             raise exceptions.ApiError('Data marked "done" but contains null value.')
-        return self._data
-
-    def set(self, value):
-        if self._description.dtype == NDArray:
-            self._data = gmx.datamodel.ndarray(value)
+        # For intuitive use in non-ensemble cases, we represent data as bare scalars
+        # when possible. It is easy to cast scalars to lists of length 1. In the future,
+        # we may distinguish between data of shape () and shape (1,), but we will need
+        # to be careful with semantics. We are already starting to adopt a rule-of-thumb
+        # that data objects assume the minimum dimensionality necessary unless told
+        # otherwise, and we could make that a hard rule if it doesn't make other things
+        # too difficult.
+        if self._description.width == 1:
+            return self._data[0]
         else:
-            self._data = self._description.dtype(value)
-        self._done = True
+            return self._data
+
+    def set(self, value, member: int):
+        if self._description.dtype == NDArray:
+            self._data[member] = gmx.datamodel.ndarray(value)
+        else:
+            self._data[member] = self._description.dtype(value)
+        self._done[member] = True
+
+
+class SinkTerminal(object):
+    """Operation input end of a data edge.
+
+    In addition to the information in an InputCollectionDescription, includes
+    topological information for the Operation node (ensemble width).
+
+    Collaborations: Required for creation of a DataEdge. Created with knowledge
+    of a DataSourceCollection instance and a InputCollectionDescription.
+    """
+
+    def __init__(self, input_collection_description: InputCollectionDescription):
+        """Define an appropriate data sink for a new operation node.
+
+        Resolve data sources and input description to determine connectability,
+        topology, and any necessary implicit data transformations.
+
+        :param data_source_collection: Collection of offered input data.
+        :param input_collection_description: Available inputs for Operation
+        :return: Fully formed description of the Sink terminal for a data edge to be created.
+
+        Collaborations: Execution Context implementation.
+        """
+        self.ensemble_width = 1
+        self.inputs = input_collection_description
+
+    def update_width(self, width: int):
+        if not isinstance(width, int):
+            try:
+                width = int(width)
+            except TypeError:
+                raise exceptions.TypeError('Need an integer width > 0.')
+        if width < 1:
+            raise exceptions.ValueError('Nonsensical ensemble width: {}'.format(int(width)))
+        if self.ensemble_width != 1:
+            if width != self.ensemble_width:
+                raise exceptions.ValueError(
+                    'Cannot change ensemble width {} to width {}.'.format(self.ensemble_width, width))
+        self.ensemble_width = width
+
+    def update(self, data_source_collection: DataSourceCollection):
+        """Update the SinkTerminal with the proposed data provider."""
+        for name, sink_dtype in self.inputs.items():
+            if name not in data_source_collection:
+                # If/when we accept data from multiple sources, we'll need some additional sanity checking.
+                if not hasattr(self.inputs.signature.parameters[name], 'default'):
+                    raise exceptions.UsageError('No data or default for {}'.format(name))
+            else:
+                # With a single data source, we need data to be in the source or have a default
+                assert name in data_source_collection
+                assert issubclass(sink_dtype, (str, bool, int, float, dict, NDArray))
+                source = data_source_collection[name]
+                if isinstance(source, sink_dtype):
+                    continue
+                else:
+                    if isinstance(source, collections.abc.Iterable) and not isinstance(source, (
+                            str, bytes, collections.abc.Mapping)):
+                        assert isinstance(source, NDArray)
+                        if sink_dtype != NDArray:
+                            # Implicit scatter
+                            self.update_width(len(source))
+
+
+class DataEdge(object):
+    """State and description of a data flow edge.
+
+    A DataEdge connects a data source collection to a data sink. A sink is an
+    input or collection of inputs of an operation (or fused operation). An operation's
+    inputs may be fed from multiple data source collections, but an operation
+    cannot be fully instantiated until all of its inputs are bound, so the DataEdge
+    is instantiated at the same time the operation is instantiated because the
+    required topology of a graph edge may be determined by the required topology
+    of another graph edge.
+
+    A data edge has a well-defined topology only when it is terminated by both
+    a source and sink. Creation requires that a source collection is compared to
+    a sink description.
+
+    Calling code initiates edge creation by passing well-described data sources
+    to an operation factory. The data sources may be annotated with explicit scatter
+    or gather commands.
+
+    The resource manager for the new operation determines the
+    required shape of the sink to handle all of the offered input.
+
+    Broadcasting
+    and transformations of the data sources are then determined and the edge is
+    established.
+
+    At that point, the fingerprint of the input data at each operation
+    becomes available to the resource manager for the operation. The fingerprint
+    has sufficient information for the resource manager of the operation to
+    request and receive data through the execution context.
+
+    Instantiating operations and data edges implicitly involves collaboration with
+    a Context instance. The state of a given Context or the availability of a
+    default Context through a module function may affect the ability to instantiate
+    an operation or edge. In other words, behavior may be different for connections
+    being made in the scripting environment versus the running Session, and implementation
+    details can determine whether or not new operations or data flow can occur in
+    different code environments.
+    """
+
+    class ConstantResolver(object):
+        def __init__(self, value):
+            self.value = value
+
+        def __call__(self, member=None):
+            return self.value
+
+    def __init__(self, source_collection: DataSourceCollection, sink_terminal: SinkTerminal):
+        # Adapters are callables that transform a source and node ID to local data.
+        # Every key in the sink has an adapter.
+        self.adapters = {}
+        self.sink_terminal = sink_terminal
+        for name in sink_terminal.inputs:
+            if name not in source_collection:
+                if hasattr(sink_terminal.inputs[name], 'default'):
+                    self.adapters[name] = self.ConstantResolver(sink_terminal.inputs[name])
+                else:
+                    # TODO: Initialize with multiple DataSourceCollections
+                    pass
+            else:
+                source = source_collection[name]
+                sink = sink_terminal.inputs[name]
+                if isinstance(source, (str, bool, int, float, dict)):
+                    if issubclass(sink, (str, bool, int, float, dict)):
+                        self.adapters[name] = self.ConstantResolver(source)
+                    else:
+                        assert issubclass(sink, NDArray)
+                        self.adapters[name] = self.ConstantResolver(ndarray([source]))
+                elif isinstance(source, NDArray):
+                    if issubclass(sink, NDArray):
+                        # TODO: shape checking
+                        # Implicit broadcast may not be what is intended
+                        self.adapters[name] = self.ConstantResolver(source)
+                    else:
+                        if source.shape[0] != sink_terminal.ensemble_width:
+                            raise exceptions.ValueError(
+                                'Implicit broadcast could not match array source to ensemble sink')
+                        else:
+                            self.adapters[name] = lambda node, source=source: source[node]
+                elif hasattr(source, 'result'):
+                    # Handle data futures...
+                    self.adapters[name] = source.result
+                else:
+                    assert isinstance(source, EnsembleDataSource)
+                    self.adapters[name] = lambda member, source=source: source.node(member)
+
+    def resolve(self, key: str, member: int):
+        return self.adapters[key](member=member)
+
+    def sink(self, node: int) -> dict:
+        """Consume data for the specified sink terminal node.
+
+        Run-time utility delivers data from the bound data source(s) for the
+        specified terminal that was configured when the edge was created.
+
+        Terminal node is identified by a member index number.
+
+        Returns:
+            A Python dictionary of the provided inputs as local data (not Future).
+        """
+        results = {}
+        sink_ports = self.sink_terminal.inputs
+        for key in sink_ports:
+            results[key] = self.resolve(key, node)
+        return results
 
 
 class ResourceManager(object):
@@ -626,7 +829,7 @@ class ResourceManager(object):
     """
 
     @contextmanager
-    def __publishing_context(self):
+    def __publishing_context(self, ensemble_member=0):
         """Get a context manager for resolving the data dependencies of this node.
 
         The returned object is a Python context manager (used to open a `with` block)
@@ -645,17 +848,27 @@ class ResourceManager(object):
         # TODO:
         # if self._data.done():
         #     raise exceptions.ProtocolError('Resources have already been published.')
-        resource = self._operation.PublishingDataProxy(weakref.proxy(self))
+
+        # I don't think we want the OperationDetails to need to know about ensemble data,
+        # (though the should probably be allowed to), so we may need a separate interface
+        # for the resource manager with built-in scope-limiting to a single ensemble member.
+        # Right now, one Operation handle owns one ResourceManager (which takes care of
+        # the ensemble details), which owns one OperationDetails (which has no ensemble knowledge).
+        # It is the responsibility of the calling code to make sure the PublishingDataProxy
+        # gets used correctly.
+
         # ref: https://docs.python.org/3/library/contextlib.html#contextlib.contextmanager
         try:
-            yield resource
+            if not self._done[ensemble_member]:
+                resource = self._operation.PublishingDataProxy(weakref.proxy(self), ensemble_member)
+                yield resource
         except Exception as e:
             message = 'Uncaught exception while providing output-publishing resources for {}.'.format(self._runner)
             raise exceptions.ApiError(message) from e
         finally:
-            self.done = True
+            self._done[ensemble_member] = True
 
-    def __init__(self, input_fingerprint=None, operation=None):
+    def __init__(self, source: DataEdge = None, operation=None):
         """Initialize a resource manager for the inputs and outputs of an operation.
 
         Arguments:
@@ -665,25 +878,34 @@ class ResourceManager(object):
         """
         runner = operation.runner
         assert callable(runner)
-        assert input_fingerprint is not None
 
         # Note: This implementation assumes there is one ResourceManager instance per data source,
         # so we only stash the inputs and dependency information for a single set of resources.
         # TODO: validate input_fingerprint as its interface becomes clear.
-        self._input_fingerprint = input_fingerprint
+        self._input_edge = source
+        self.ensemble_width = self._input_edge.sink_terminal.ensemble_width
         self._operation = operation
 
-        self._data = self._operation.make_datastore()
+        self._data = self._operation.make_datastore(self.ensemble_width)
 
+        # We store a rereference to the publishing context manager implementation
+        # in a data structure that can only produce one per Python interpreter
+        # (using list.pop()).
         # TODO: reimplement as a data descriptor
         #  so that PublishingDataProxy does not need a bound circular reference.
         self.__publishing_resources = [self.__publishing_context]
 
-        self.done = False
+        self._done = [False] * self.ensemble_width
         self._runner = runner
         self.__operation_entrance_counter = 0
 
-    def set_result(self, name, value):
+    def done(self, member=None):
+        if member is None:
+            return all(self._done)
+        else:
+            return self._done[member]
+
+    def set_result(self, name, value, member: int):
         try:
             for item in value:
                 # In this specification, it is antithetical to publish Futures.
@@ -700,7 +922,7 @@ class ResourceManager(object):
         #                           dtype=type_annotation,
         #                           done=True,
         #                           data=type_caster(value))
-        self._data[name].set(value)
+        self._data[name].set(value=value, member=member)
 
     def update_output(self):
         """Bring the output of the bound operation up to date.
@@ -719,36 +941,37 @@ class ResourceManager(object):
         # This code is not intended to be reentrant. We make a modest attempt to
         # catch unexpected reentrance, but this is not (yet) intended to be a thread-safe
         # resource manager implementation.
-        if not self.done:
+        # TODO: Handle checking just the ensemble members this resource manager is responsible for.
+        if not self.done():
             self.__operation_entrance_counter += 1
             if self.__operation_entrance_counter > 1:
                 raise exceptions.ProtocolError('Bug detected: resource manager tried to execute operation twice.')
-            if not self.done:
-                with self.local_input() as input:
-                    # Note: Resources are marked "done" by the resource manager
-                    # when the following context manager completes.
-                    # TODO: Allow both structured and singular output.
-                    #  For simple functions, just capture and publish the return value.
-                    with self.publishing_resources() as output:
-                        # self._runner(*input.args, output=output, **input.kwargs)
-                        ####
-                        # Here we can make _runner a thing that accepts session resources, and
-                        # is created by specializable builders. Separate out the expression of
-                        # inputs.
-                        #
-                        # resource_builder = ResourcesBuilder()
-                        # runner_builder = RunnerBuilder()
-                        # input_resource_director = self._input_resource_factory.director(input)
-                        # output_resource_director = self._publishing_resource_factory.director(output)
-                        # input_resource_director(resource_builder, runner_builder)
-                        # output_resource_director(resource_builder, runner_builder)
-                        # resources = resource_builder.build()
-                        # runner = runner_builder.build()
-                        # runner(resources)
-                        resources = self._operation.resource_director(input=input, output=output)
-                        self._runner(resources)
+            if not self.done():
+                # Note! This is a detail of the ResourceManager in a SerialContext
+                for i in range(self.ensemble_width):
+                    with self.local_input(i) as input:
+                        # Note: Resources are marked "done" by the resource manager
+                        # when the following context manager completes.
+                        with self.publishing_resources()(ensemble_member=i) as output:
+                            # self._runner(*input.args, output=output, **input.kwargs)
+                            ####
+                            # Here we can make _runner a thing that accepts session resources, and
+                            # is created by specializable builders. Separate out the expression of
+                            # inputs.
+                            #
+                            # resource_builder = ResourcesBuilder()
+                            # runner_builder = RunnerBuilder()
+                            # input_resource_director = self._input_resource_factory.director(input)
+                            # output_resource_director = self._publishing_resource_factory.director(output)
+                            # input_resource_director(resource_builder, runner_builder)
+                            # output_resource_director(resource_builder, runner_builder)
+                            # resources = resource_builder.build()
+                            # runner = runner_builder.build()
+                            # runner(resources)
+                            resources = self._operation.resource_director(input=input, output=output)
+                            self._runner(resources)
 
-    def future(self, name: str = None, description: gmx.datamodel.ResultDescription = None):
+    def future(self, name: str, description: gmx.datamodel.ResultDescription):
         """Retrieve a Future for a named output.
 
         Provide a description of the expected result to check for compatibility or
@@ -774,7 +997,7 @@ class ResourceManager(object):
         return self._operation.OutputDataProxy(self)
 
     @contextmanager
-    def local_input(self):
+    def local_input(self, member: int = None):
         """In an API session, get a handle to fully resolved locally available input data.
 
         Execution dependencies are resolved on creation of the context manager. Input data
@@ -800,49 +1023,55 @@ class ResourceManager(object):
         # except Exception as E:
         #     raise exceptions.ApiError('input_fingerprint not iterating on "args" attr as expected.') from E
 
-        kwargs = {}
-        try:
-            for key, value in self._input_fingerprint.items():
-                if hasattr(value, 'run'):
-                    # TODO: Do we still have these?
-                    logger.debug('Calling run() for execution-only dependency {}.'.format(key))
-                    value.run()
-                    continue
+        # kwargs = {}
+        # try:
+        #     for key, value in self._input_fingerprint.items():
+        #         if hasattr(value, 'run'):
+        #             # TODO: Do we still have these?
+        #             logger.debug('Calling run() for execution-only dependency {}.'.format(key))
+        #             value.run()
+        #             continue
+        #
+        #         if hasattr(value, 'result'):
+        #             kwargs[key] = value.result()
+        #         else:
+        #             kwargs[key] = value
+        #         if isinstance(kwargs[key], list):
+        #             new_list = []
+        #             for item in kwargs[key]:
+        #                 if hasattr(item, 'result'):
+        #                     new_list.append(item.result())
+        #                 else:
+        #                     new_list.append(item)
+        #             kwargs[key] = new_list
+        #         try:
+        #             for item in kwargs[key]:
+        #                 # TODO: This should not happen. Need proper tools for NDArray Futures.
+        #                 # assert not hasattr(item, 'result')
+        #                 if hasattr(item, 'result'):
+        #                     kwargs[key][item] = item.result()
+        #         except TypeError:
+        #             # This is only a test for iterables
+        #             pass
+        # except Exception as E:
+        #     raise exceptions.ApiError('input_fingerprint not iterating on "kwargs" attr as expected.') from E
 
-                if hasattr(value, 'result'):
-                    kwargs[key] = value.result()
-                else:
-                    kwargs[key] = value
-                if isinstance(kwargs[key], list):
-                    new_list = []
-                    for item in kwargs[key]:
-                        if hasattr(item, 'result'):
-                            new_list.append(item.result())
-                        else:
-                            new_list.append(item)
-                    kwargs[key] = new_list
-                try:
-                    for item in kwargs[key]:
-                        # TODO: This should not happen. Need proper tools for NDArray Futures.
-                        # assert not hasattr(item, 'result')
-                        if hasattr(item, 'result'):
-                            kwargs[key][item] = item.result()
-                except TypeError:
-                    # This is only a test for iterables
-                    pass
-        except Exception as E:
-            raise exceptions.ApiError('input_fingerprint not iterating on "kwargs" attr as expected.') from E
-
+        kwargs = self._input_edge.sink(node=member)
         assert 'input' not in kwargs
 
+        # Check that we have real data
         for key, value in kwargs.items():
-            if key == 'command':
-                if type(value) == list:
-                    for item in value:
-                        assert not hasattr(item, 'result')
+            assert not hasattr(value, 'result')
+            assert not hasattr(value, 'run')
+            if type(value) == list:
+                for item in value:
+                    assert not hasattr(item, 'result')
+
         input_pack = collections.namedtuple('InputPack', ('kwargs'))(kwargs)
 
         # Prepare input data structure
+        # Note: we use 'yield' instead of 'return' for the protocol expected by
+        # the @contextmanager decorator
         yield input_pack
 
     def publishing_resources(self):
@@ -855,7 +1084,7 @@ class ResourceManager(object):
         Write access to publishing resources can be granted exactly once during the
         resource manager lifetime and conveys exclusive access.
         """
-        return self.__publishing_resources.pop()()
+        return self.__publishing_resources.pop()
 
 
 class CapturedOutputRunner(object):
@@ -908,7 +1137,8 @@ def wrapped_function_runner(function, output_description: OutputCollectionDescri
     if 'output' in signature.parameters:
         if not isinstance(output_description, OutputCollectionDescription):
             if not isinstance(output_description, collections.abc.Mapping):
-                raise exceptions.UsageError('Function passes output through call argument, but output is not described.')
+                raise exceptions.UsageError(
+                    'Function passes output through call argument, but output is not described.')
             return OutputParameterRunner(function, OutputCollectionDescription(**output_description))
         else:
             return OutputParameterRunner(function, output_description)
@@ -946,21 +1176,22 @@ class OperationDetails(object):
     handle.
     """
 
-    def __init__(self, function=None, output_description=None, input_description=None):
+    def __init__(self, function=None, output_description: dict = None,
+                 input_description: InputCollectionDescription = None):
         self.runner = wrapped_function_runner(function, output_description)
         self.output_description = self.runner.output_description
         self._output_data_proxy = define_output_data_proxy(self.output_description)
         self._publishing_data_proxy = define_publishing_data_proxy(self.output_description)
 
-        # Deterimine input details
+        # Determine input details
         # TODO FR4: standardize typing
         self._input_signature_description = input_description
 
-    def make_datastore(self):
+    def make_datastore(self, ensemble_width: int):
         datastore = {}
         for name, dtype in self.output_description.items():
             assert isinstance(dtype, type)
-            result_description = gmx.datamodel.ResultDescription(dtype)
+            result_description = gmx.datamodel.ResultDescription(dtype, width=ensemble_width)
             datastore[name] = OutputData(name=name, description=result_description)
         return datastore
 
@@ -1101,7 +1332,7 @@ def function_wrapper(output: dict = None):
     def decorator(function):
         input_collection_description = InputCollectionDescription.from_function(function)
 
-        def get_resource_manager(input_fingerprint):
+        def get_resource_manager(source: DataEdge):
             """Provide a reference to a resource manager for the dynamically defined Operation.
 
             Initial Operation implementation must own ResourceManager. As more formal Context is
@@ -1109,10 +1340,11 @@ def function_wrapper(output: dict = None):
             between the facet of the Context-level resource manager to which the Operation has access
             and the whole of the managed resources.
             """
-            return ResourceManager(input_fingerprint=input_fingerprint,
-                                   operation=OperationDetails(function=function,
-                                                              output_description=output,
-                                                              input_description=input_collection_description))
+            return ResourceManager(
+                source=source,
+                operation=OperationDetails(function=function,
+                                           output_description=output,
+                                           input_description=input_collection_description))
 
         @functools.wraps(function)
         def factory(*args, **kwargs):
@@ -1134,7 +1366,12 @@ def function_wrapper(output: dict = None):
             # for the implementation details (wrapped function and provided input.
 
             # Define the unique identity and data flow constraints of this work graph node.
-            input_data_fingerprint = input_collection_description.bind(*args, **kwargs)
+            data_source_collection = input_collection_description.bind(*args, **kwargs)
+            sink = SinkTerminal(input_collection_description)
+            sink.update(data_source_collection)
+            edge = DataEdge(data_source_collection, sink)
+            #            input_data_fingerprint = edge.fingerprint()
+            #            input_data_fingerprint = input_collection_description.bind(*args, **kwargs)
 
             # Try to determine what 'input' is.
             # TODO: (FR5+) handling should be related to Context.
@@ -1157,7 +1394,8 @@ def function_wrapper(output: dict = None):
             # When compared to the InputCollectionDescription, the data compatibility
             # can be determined.
 
-            resource_manager = get_resource_manager(input_data_fingerprint)
+            #            resource_manager = get_resource_manager(source=edge, input_fingerprint=input_data_fingerprint)
+            resource_manager = get_resource_manager(source=edge)
             operation = Operation(resource_manager)
             return operation
 
