@@ -297,7 +297,8 @@ class EnsembleDataSource(object):
 class DataSourceCollection(collections.OrderedDict):
     """Store and describe input data handles for an operation.
 
-
+    When created from InputCollectionDescription.bind(), the DataSourceCollection
+    has had default values inserted.
     """
 
     def __init__(self, **kwargs):

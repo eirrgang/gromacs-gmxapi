@@ -69,7 +69,7 @@ logger.info('Importing gmxapi.commandline_operation')
 # TODO: Operation returns the output object when called with the shorter signature.
 #
 @function_wrapper(output={'erroroutput': str, 'returncode': int})
-def cli(command: NDArray = (), shell: bool = None, output: OutputCollectionDescription = None):
+def cli(command: NDArray, shell: bool, output: OutputCollectionDescription = None):
     """Execute a command line program in a subprocess.
 
     Configure an executable in a subprocess. Executes when run in an execution

@@ -148,7 +148,7 @@ def join_arrays(a: NDArray = (), b: NDArray = ()) -> NDArray:
         raise exceptions.ValueError('Input must be a pair of lists.')
     assert isinstance(a, NDArray)
     assert isinstance(b, NDArray)
-    new_list = a.values
+    new_list = list(a.values)
     new_list.extend(b.values)
     return new_list
 
@@ -308,6 +308,9 @@ class InputCollectionDescription(collections.OrderedDict):
         factory to accept positional arguments where named inputs are usually
         required. It also allows data sources to participate in multiple
         DataSourceCollections with minimal constraints.
+
+        Note that the returned object has had data populated from any defaults
+        described in the InputCollectionDescription.
 
         See wrapped_function_runner() and describe_function_input().
         """
@@ -716,8 +719,8 @@ class DataEdge(object):
                 if hasattr(sink_terminal.inputs[name], 'default'):
                     self.adapters[name] = self.ConstantResolver(sink_terminal.inputs[name])
                 else:
-                    # TODO: Initialize with multiple DataSourceCollections
-                    pass
+                    # TODO: Initialize with multiple DataSourceCollections?
+                    raise exceptions.ValueError('No source or default for required input "{}".'.format(name))
             else:
                 source = source_collection[name]
                 sink = sink_terminal.inputs[name]
@@ -737,10 +740,17 @@ class DataEdge(object):
                             raise exceptions.ValueError(
                                 'Implicit broadcast could not match array source to ensemble sink')
                         else:
-                            self.adapters[name] = lambda node, source=source: source[node]
+                            self.adapters[name] = lambda member, source=source: source[member]
                 elif hasattr(source, 'result'):
                     # Handle data futures...
-                    self.adapters[name] = source.result
+                    # If the Future is part of an ensemble, result() will return a list.
+                    # Otherwise, it will return a single object.
+                    assert isinstance(source, Future)
+                    ensemble_width = source.description.width
+                    if ensemble_width == 1:
+                        self.adapters[name] = lambda member, source=source: source.result()
+                    else:
+                        self.adapters[name] = lambda member, source=source: source.result()[member]
                 else:
                     assert isinstance(source, EnsembleDataSource)
                     self.adapters[name] = lambda member, source=source: source.node(member)
