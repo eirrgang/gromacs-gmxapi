@@ -195,8 +195,12 @@ def filemap_to_flag_list(filemap: dict = None):
         for key, value in filemap.items():
             # Note that the value may be a string, a list, an ndarray, or a future
             if not isinstance(value, (list, tuple, NDArray)):
-                if isinstance(value, Future) and value.dtype == NDArray:
+                if hasattr(value, 'result') and value.dtype == NDArray:
                     pass
+                elif hasattr(value, 'result') and value.dtype != NDArray:
+                    # TODO: Fix this ugly hack when we have proper Future slicing and can make NDArray futures.
+                    result_function = value.result
+                    value.result = lambda function=result_function: [function()]
                 else:
                     value = [value]
             result = join_arrays(a=result, b=join_arrays(a=[key], b=value))

@@ -477,7 +477,8 @@ class Future(object):
         # reference to the resource_manager, but only to a facility that can resolve
         # the result() call. Additional aspects of the Future interface can be
         # developed without coupling to a specific concept of the resource manager.
-
+        # TODO: (FR4+) With an abstraction for the resource manager or result getter, we can have
+        #  a generic Future implementation for constant data or other resource management schemes.
         self._result = ResultGetter(resource_manager, name, description)
 
     def result(self):
@@ -493,10 +494,23 @@ class Future(object):
         # TODO: Strict definition of outputs and output types can let us validate this earlier.
         #  We need AssociativeArray and NDArray so that we can type the elements.
         #  Allowing a Future with None type is a hack.
-        def result():
-            return self.result()[item]
+        if not issubclass(self.description.dtype, (collections.abc.Mapping, collections.abc.Sequence)):
+            raise exceptions.TypeError('Future for type {} is not subscriptable.'.format(self.description.dtype))
+        else:
+            class FutureView(object):
+                def __init__(self, future: Future, key, width: int):
+                    self.dtype = None
+                    self.description = collections.namedtuple('DummyDescription', ('dtype', 'width'))(None, width)
+                    self._future = future
+                    self.key = key
 
-        future = collections.namedtuple('Future', ('dtype', 'result'))(None, result)
+                def result(self):
+                    if self.description.width == 1:
+                        return self._future.result()[self.key]
+                    else:
+                        return [subscriptable[self.key] for subscriptable in self._future.result()]
+
+            future = FutureView(self, str(item), self.description.width)
         return future
 
 
@@ -745,7 +759,6 @@ class DataEdge(object):
                     # Handle data futures...
                     # If the Future is part of an ensemble, result() will return a list.
                     # Otherwise, it will return a single object.
-                    assert isinstance(source, Future)
                     ensemble_width = source.description.width
                     if ensemble_width == 1:
                         self.adapters[name] = lambda member, source=source: source.result()
@@ -1073,9 +1086,18 @@ class ResourceManager(object):
         for key, value in kwargs.items():
             assert not hasattr(value, 'result')
             assert not hasattr(value, 'run')
-            if type(value) == list:
-                for item in value:
-                    assert not hasattr(item, 'result')
+            value_list = []
+            if isinstance(value, list):
+                value_list = value
+            if isinstance(value, NDArray):
+                value_list = value.values
+            if isinstance(value, collections.abc.Mapping):
+                value_list = value.values()
+            assert not isinstance(value_list, (Future))
+            assert not hasattr(value_list, 'result')
+            assert not hasattr(value_list, 'run')
+            for item in value_list:
+                assert not hasattr(item, 'result')
 
         input_pack = collections.namedtuple('InputPack', ('kwargs'))(kwargs)
 
@@ -1225,6 +1247,12 @@ class OperationDetails(object):
                 output.data = data
 
             self.runner.capture_output = capture
+
+        # TODO: Remove this hack when we can better handle Futures of Containers and Future slicing.
+        for name in resources.kwargs:
+            if isinstance(resources.kwargs[name], (list, tuple)):
+                resources.kwargs[name] = ndarray(resources.kwargs[name])
+
         # Check data compatibility
         for name, value in resources.kwargs.items():
             if name != 'output':

@@ -162,6 +162,8 @@ class NDArray(object):
         self.dtype = None
         self.shape = ()
         if data is not None:
+            if hasattr(data, 'result') or (isinstance(data, collections.abc.Iterable) and any([hasattr(item, 'result') for item in data])):
+                raise exceptions.ValueError('Make a Future of type NDArray instead of NDArray of type Future, or call result() first.')
             if isinstance(data, (str, bytes)):
                 data = [data]
                 length = 1
@@ -319,7 +321,14 @@ class DataSourceCollection(collections.OrderedDict):
             if not isinstance(value, (str, bool, int, float, dict, NDArray, EnsembleDataSource)):
                 if isinstance(value, collections.abc.Iterable):
                     # Note: Here we assume that iterables are arrays first and ensemble data if necessary.
+                    # Warning: the iterable may contain Future objects.
+                    # TODO: revisit as we sort out data shape and Future protocol.
                     value = ndarray(value)
+                elif hasattr(value, 'result'):
+                    # A Future object.
+                    pass
+                else:
+                    raise exceptions.ApiError('Cannot process data source {}'.format(value))
             named_data.append((name, value))
         super().__init__(named_data)
 
@@ -353,6 +362,11 @@ def ndarray(data=None):
      function(s) for other use cases, a la numpy.asarray()
     """
     # assert isinstance(shape, tuple)
+    if hasattr(data, 'result'):
+        # TODO: reinstate this check when we have a way to convert Futures of Scalar (or unknown) type
+        #  into Futures of NDArray type.
+        #raise exceptions.ValueError('Cannot construct an NDArray from a Future object.')
+        pass
     if data is None:
         # if shape is None or dtype is None:
         #     raise exceptions.ValueError('If data is not provided, both shape and dtype are required.')
