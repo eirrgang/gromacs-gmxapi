@@ -156,7 +156,7 @@ def join_arrays(a: NDArray = (), b: NDArray = ()) -> NDArray:
 Scalar = TypeVar('Scalar')
 
 
-def concatenate_lists(sublists: list = ()) -> NDArray:
+def concatenate_lists(sublists: list = ()):
     """Combine data sources into a single list.
 
     A trivial data flow restructuring operation
@@ -169,7 +169,7 @@ def concatenate_lists(sublists: list = ()) -> NDArray:
         return join_arrays(a=sublists[0], b=concatenate_lists(sublists[1:]))
 
 
-def make_constant(value: Scalar) -> Scalar:
+def make_constant(value: Scalar):
     """Provide a predetermined value at run time.
 
     This is a trivial operation that provides a (typed) value, primarily for
@@ -1356,6 +1356,7 @@ def function_wrapper(output: dict = None):
                                            output_description=output,
                                            input_description=input_collection_description))
 
+        # TODO: (FR4) Update annotations with gmxapi data types. E.g. return -> Future.
         @functools.wraps(function)
         def factory(*args, **kwargs):
             # Description of the Operation input (and output) occurs in the
