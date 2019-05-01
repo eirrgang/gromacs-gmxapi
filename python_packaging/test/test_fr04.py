@@ -49,7 +49,7 @@ def test_fr4(spc216):
 
     # Array inputs imply array outputs.
     input_array = gmx.modify_input(
-        simulation_input, params={'tau-t': [t / 10.0 for t in range(N)]})
+        simulation_input, params=gmx.scatter([{'tau-t': t / 10.0} for t in range(N)]))
 
     md = gmx.mdrun(input_array)  # An array of simulations
 
@@ -58,6 +58,6 @@ def test_fr4(spc216):
         'rmsf',
         input={
             '-f': md.output.trajectory,
-            '-s': initial_tpr
+            '-s': spc216
         },
         output={'-o': gmx.FileName(suffix='.xvg')})
