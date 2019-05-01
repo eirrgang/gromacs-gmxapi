@@ -34,13 +34,36 @@
 
 """gmxapi data types and interfaces.
 
-The data types defined here are Abstract Data Types in the styles of both
+The data types defined here are Abstract Base Classes (ABCs) in the styles of both
 collections.abc and typing modules. They can be used to validate interfaces or
-data compatibility. They can be used as base classes for concrete types, but
+data compatibility with isinstance and issubclass checks even for types that
+don't explicitly inherit from the ABCs.
+
+The ABCs can be used as base classes for concrete types, but
 code should not assume that gmxapi data objects actually inherit from these
 base classes. In fact, gmxapi data objects will generally be C (or C++) objects
 accompanied by C struct descriptors. ABI compatibility relies on these C structs
 and the accompanying Python Capsule schema.
+
+Note that, in the senses above, Python "abstract base class" has a different
+meaning than in C++.
+
+TODO: Placeholders
+Input Placeholders.
+An operation factory can advertise allowed inputs by name, shape, and type, as
+well as advertising flexibility. Named inputs may be optional. Number of dimensions
+is fixed, but the size in a given dimension may be fixed or flexible. A named
+input may have flexible type. Once a data edge and terminal operation are
+instantiated, though, the output of the Operation is well defined.
+
+Need a way to represent Type placeholders for Operation inputs in InputCollectionDescription
+and factory declarations.
+
+Need a way to express input data shape with magic integer placeholders.
+
+File placeholder: Input and output files have constraints on their filename suffixes,
+but should otherwise be left abstract until data connections are made. This is a
+special case of a string Future when we are dealing with files by name only.
 """
 
 # __all__ = ['ndarray']
@@ -48,7 +71,6 @@ and the accompanying Python Capsule schema.
 import collections
 
 from gmxapi import exceptions
-
 
 # class GmxapiDataType(Enum):
 #     Boolean = auto()
@@ -286,11 +308,14 @@ class ResultDescription:
 
 
 class EnsembleDataSource(object):
-    """A single source of data with ensemble data flow annotations."""
-    def __init__(self):
-        self.source = None
-        self.width = 1
-        self.dtype = None
+    """A single source of data with ensemble data flow annotations.
+
+    Note that data sources may be Futures.
+    """
+    def __init__(self, source=None, width=1, dtype=None):
+        self.source = source
+        self.width = width
+        self.dtype = dtype
 
     def node(self, member: int):
         return self.source[member]

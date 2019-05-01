@@ -50,12 +50,15 @@ The framework ensures that an Operation instance is executed no more than once.
 """
 
 __all__ = ['computed_result',
-           'join_arrays',
            'concatenate_lists',
            'function_wrapper',
+           'gather',
+           'join_arrays',
            'make_constant',
+           'scatter'
            ]
 
+import abc
 import functools
 import inspect
 import weakref
@@ -446,43 +449,90 @@ def define_publishing_data_proxy(output_description):
     return type('PublishingDataProxy', (DataProxyBase,), namespace)
 
 
-class ResultGetter(object):
-    """Fetch data to the caller's Context.
+class SourceResource(abc.ABC):
+    """Resource Manager for a data provider."""
 
-    Returns an object of the concrete type specified according to
-    the operation that produces this Result.
+    @classmethod
+    def __subclasshook__(cls, C):
+        """Check if a class looks like a ResourceManager for a data source."""
+        if cls is SourceResource:
+            if any('update_output' in B.__dict__ for B in C.__mro__) \
+                    and hasattr(C, '_data'):
+                return True
+        return NotImplemented
+
+    @abc.abstractmethod
+    def is_done(self, name: str) -> bool:
+        return False
+
+    @abc.abstractmethod
+    def get(self, name: str):
+        return None
+
+    @abc.abstractmethod
+    def update_output(self):
+        """Bring the _data member up to date and local."""
+        pass
+
+
+class ProxyResourceManager(SourceResource):
+    """Act as a resource manager for data managed by another resource manager.
+
+    Allow data transformations on the proxied resource.
     """
 
-    def __init__(self, resource_manager, name, data_description: gmx.datamodel.ResultDescription):
-        self.resource_manager = resource_manager
-        self.name = name
-        assert isinstance(data_description, gmx.datamodel.ResultDescription)
-        self.data_description = data_description
+    def __init__(self, proxied_future, width: int, function):
+        self._done = False
+        self._proxied_future = proxied_future
+        self._width = width
+        self.name = self._proxied_future.name
+        self._result = None
+        self.function = function
 
-    def __call__(self):
-        self.resource_manager.update_output()
-        assert self.resource_manager._data[self.name].done
-        # Return ownership of concrete data
-        handle = self.resource_manager._data[self.name]
-        return handle.data
+    def is_done(self, name: str) -> bool:
+        return self._done
+
+    def get(self, name: str):
+        if name != self.name:
+            raise exceptions.ValueError('Request for unknown data.')
+        if not self.is_done(name):
+            raise exceptions.ProtocolError('Data not ready.')
+        result = self.function(self._result)
+        if self._width != 1:
+            # TODO Fix this typing nightmare.
+            data = OutputData(name=self.name, description=ResultDescription(dtype=type(result[0]), width=self._width))
+            for member, value in enumerate(result):
+                data.set(value, member)
+        else:
+            data = OutputData(name=self.name, description=ResultDescription(dtype=type(result), width=self._width))
+            data.set(result, 0)
+        return data
+
+    def update_output(self):
+        self._result = self._proxied_future.result()
+        self._done = True
 
 
 class Future(object):
-    def __init__(self, resource_manager, name: str = '', description: gmx.datamodel.ResultDescription = None):
+    def __init__(self, resource_manager: SourceResource, name: str, description: gmx.datamodel.ResultDescription):
         self.name = name
         if not isinstance(description, gmx.datamodel.ResultDescription):
             raise exceptions.ValueError('Need description of requested data.')
+        self.resource_manager = resource_manager
         self.description = description
-        # This abstraction anticipates that a Future might not retain a strong
-        # reference to the resource_manager, but only to a facility that can resolve
-        # the result() call. Additional aspects of the Future interface can be
-        # developed without coupling to a specific concept of the resource manager.
-        # TODO: (FR4+) With an abstraction for the resource manager or result getter, we can have
-        #  a generic Future implementation for constant data or other resource management schemes.
-        self._result = ResultGetter(resource_manager, name, description)
 
     def result(self):
-        return self._result()
+        """Fetch data to the caller's Context.
+
+        Returns an object of the concrete type specified according to
+        the operation that produces this Result.
+        """
+        self.resource_manager.update_output()
+        # TODO: refactor to something like resource_manager.is_done(self.name)
+        assert self.resource_manager.is_done(self.name)
+        # Return ownership of concrete data
+        handle = self.resource_manager.get(self.name)
+        return handle.data
 
     @property
     def dtype(self):
@@ -490,27 +540,19 @@ class Future(object):
 
     def __getitem__(self, item):
         """Get a more limited view on the Future."""
-
-        # TODO: Strict definition of outputs and output types can let us validate this earlier.
-        #  We need AssociativeArray and NDArray so that we can type the elements.
-        #  Allowing a Future with None type is a hack.
-        if not issubclass(self.description.dtype, (collections.abc.Mapping, collections.abc.Sequence)):
-            raise exceptions.TypeError('Future for type {} is not subscriptable.'.format(self.description.dtype))
+        description = gmx.datamodel.ResultDescription(dtype=self.dtype, width=self.description.width)
+        # TODO: Use explicit typing when we have more thorough typing.
+        description._dtype = None
+        if self.description.width == 1:
+            proxy = ProxyResourceManager(self,
+                                         width=description.width,
+                                         function=lambda value, key=item: value[key])
         else:
-            class FutureView(object):
-                def __init__(self, future: Future, key, width: int):
-                    self.dtype = None
-                    self.description = collections.namedtuple('DummyDescription', ('dtype', 'width'))(None, width)
-                    self._future = future
-                    self.key = key
-
-                def result(self):
-                    if self.description.width == 1:
-                        return self._future.result()[self.key]
-                    else:
-                        return [subscriptable[self.key] for subscriptable in self._future.result()]
-
-            future = FutureView(self, str(item), self.description.width)
+            proxy = ProxyResourceManager(self,
+                                         width=description.width,
+                                         function=lambda value, key=item:
+                                         [subscriptable[key] for subscriptable in value])
+        future = Future(proxy, self.name, description=description)
         return future
 
 
@@ -789,7 +831,7 @@ class DataEdge(object):
         return results
 
 
-class ResourceManager(object):
+class ResourceManager(SourceResource):
     """Provides data publication and subscription services.
 
         Owns the data published by the operation implementation or served to consumers.
@@ -946,6 +988,22 @@ class ResourceManager(object):
         #                           done=True,
         #                           data=type_caster(value))
         self._data[name].set(value=value, member=member)
+
+    def is_done(self, name):
+        return self._data[name].done
+
+    def get(self, name: str):
+        """
+
+        Raises exceptions.ProtocolError if requested data is not local yet.
+        Raises exceptions.ValueError if data is requested for an unknown name.
+        """
+        if name not in self._data:
+            raise exceptions.ValueError('Request for unknown data.')
+        if not self.is_done(name):
+            raise exceptions.ProtocolError('Data not ready.')
+        assert isinstance(self._data[name], OutputData)
+        return self._data[name]
 
     def update_output(self):
         """Bring the output of the bound operation up to date.
@@ -1441,6 +1499,40 @@ def function_wrapper(output: dict = None):
         return factory
 
     return decorator
+
+
+def scatter(array: NDArray) -> EnsembleDataSource:
+    """Convert array data to parallel data.
+
+    Given data with shape (M,N), produce M parallel data sources of shape (N,).
+
+    The intention is to produce ensemble data flows from NDArray sources.
+    Currently, we only support zero and one dimensional data edge cross-sections.
+    In the future, it may be clearer if `scatter()` always converts a non-ensemble
+    dimension to an ensemble dimension or creates an error, but right now there
+    are cases where it is best just to raise a warning.
+
+    If provided data is a string, mapping, or scalar, there is no dimension to
+    scatter from and DataShapeError is raised.
+
+    If an ensemble dimension is already present, scatter() must be able to match
+    the size of that dimension or raises a DataShapeError.
+    """
+
+
+def gather(data: EnsembleDataSource) -> NDArray:
+    """Combines parallel data to an NDArray source.
+
+    If the data source has an ensemble shape of (1,), result is an NDArray of
+    length 1 if for a scalar data source. For a NDArray data source, the
+    dimensionality of the NDArray is not increased, the original NDArray is
+    produced, and gather() is a no-op.
+
+    This may change in future versions so that gather always converts an
+    ensemble dimension to an array dimension.
+    """
+    # TODO: Could be used as part of the clean up for join_arrays to convert a scalar Future to a 1-D list.
+    # Note: gather() is implemented in terms of details of the execution Context.
 
 
 @function_wrapper()
