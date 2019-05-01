@@ -40,6 +40,7 @@ import gmxapi as gmx
 from gmxapi.version import has_feature
 
 
+@pytest.mark.xfail
 @pytest.mark.skipif(not has_feature('fr4'),
                     reason="Feature level not met.")
 def test_fr4(spc216):
