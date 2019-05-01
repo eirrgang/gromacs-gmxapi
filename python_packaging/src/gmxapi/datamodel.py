@@ -172,15 +172,14 @@ from gmxapi import exceptions
 #         return self._data_description
 
 
-class NDArray(object):
+class NDArray(collections.abc.Sequence):
     """N-Dimensional array type.
 
     TODO: Provide __class_getitem__ for subscripted type specification?
     TODO: Provide gmxapi Any type for TypeVar type placeholders? (ref typing module)
     """
-
     def __init__(self, data=None):
-        self.values = []
+        self._values = []
         self.dtype = None
         self.shape = ()
         if data is not None:
@@ -196,13 +195,21 @@ class NDArray(object):
                     # data is a scalar
                     length = 1
                     data = [data]
-            self.values = data
+            self._values = data
             if length > 0:
                 self.dtype = type(data[0])
                 self.shape = (length,)
 
     def to_list(self):
-        return self.values
+        return self._values
+
+    def __getitem__(self, i: int):
+        return self._values[i]
+
+    def __len__(self) -> int:
+        return len(self._values)
+
+
 
 
 #

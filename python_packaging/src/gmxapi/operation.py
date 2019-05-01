@@ -151,8 +151,8 @@ def join_arrays(a: NDArray = (), b: NDArray = ()) -> NDArray:
         raise exceptions.ValueError('Input must be a pair of lists.')
     assert isinstance(a, NDArray)
     assert isinstance(b, NDArray)
-    new_list = list(a.values)
-    new_list.extend(b.values)
+    new_list = list(a._values)
+    new_list.extend(b._values)
     return new_list
 
 
@@ -1148,7 +1148,7 @@ class ResourceManager(SourceResource):
             if isinstance(value, list):
                 value_list = value
             if isinstance(value, NDArray):
-                value_list = value.values
+                value_list = value._values
             if isinstance(value, collections.abc.Mapping):
                 value_list = value.values()
             assert not isinstance(value_list, (Future))

@@ -65,21 +65,21 @@ class ImmediateResultTestCase(unittest.TestCase):
         assert list_result.dtype == gmx.datamodel.NDArray
         # Note: this is specifically for the built-in tuple type.
         # Equality comparison may work differently for different sequence types.
-        assert tuple(list_result.result().values) == tuple(list_a)
-        assert len(list_result.result().values) == len(list_a)
+        assert tuple(list_result.result()) == tuple(list_a)
+        assert len(list_result.result()) == len(list_a)
 
         list_result = gmx.operation.concatenate_lists([list_a, list_a])
-        assert len(list_result.result().values) == len(list_a) * 2
-        assert tuple(list_result.result().values) == tuple(list_a + list_a)
+        assert len(list_result.result()) == len(list_a) * 2
+        assert tuple(list_result.result()) == tuple(list_a + list_a)
 
         list_b = gmx.ndarray([42])
 
         list_result = gmx.operation.concatenate_lists(sublists=[list_b])
-        assert list_result.result().values[0] == 42
+        assert list_result.result()[0] == 42
 
         list_result = gmx.operation.join_arrays(list_a, list_b)
-        assert len(list_result.result().values) == len(list_a) + 1
-        assert tuple(list_result.result().values) == tuple(list(list_a) + [42])
+        assert len(list_result.result()) == len(list_a) + 1
+        assert tuple(list_result.result()) == tuple(list(list_a) + [42])
 
 
 class OperationPipelineTestCase(unittest.TestCase):

@@ -132,7 +132,7 @@ def cli(command: NDArray, shell: bool, output: OutputCollectionDescription = Non
 
     if isinstance(command, (str, bytes)):
         command = [command]
-    command = list([arg for arg in command.values])
+    command = list([arg for arg in command])
     try:
         command[0] = shutil.which(command[0])
     except Exception:
