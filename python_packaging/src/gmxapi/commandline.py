@@ -69,7 +69,7 @@ logger.info('Importing gmxapi.commandline_operation')
 # TODO: Operation returns the output object when called with the shorter signature.
 #
 @gmx.function_wrapper(output={'erroroutput': str, 'returncode': int})
-def cli(command: NDArray, shell: bool, output: OutputCollectionDescription = None):
+def cli(command: NDArray, shell: bool, output: OutputCollectionDescription):
     """Execute a command line program in a subprocess.
 
     Configure an executable in a subprocess. Executes when run in an execution
@@ -282,9 +282,10 @@ def commandline_operation(executable=None,
     # 3. Merge operations
     #
     # Note: Without a `label` argument, repeated calls to cli(**cli_args) should
-    # produce references to the same unique resource. Creating this handle
-    # separately should not be necessary, but we've got a way to go until we have the
-    # fingerprinting and Context resource management we need for that.
+    # produce references to the same unique resource (but currently do not).
+    # Creating this handle separately should not be necessary,
+    # but we've got a way to go until we have the fingerprinting and Context
+    # resource management we need for that.
     # TODO: ``label`` kwarg
     # TODO: input fingerprinting
     cli_result = cli(**cli_args)

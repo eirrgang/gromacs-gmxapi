@@ -210,8 +210,6 @@ class NDArray(collections.abc.Sequence):
         return len(self._values)
 
 
-
-
 #
 # class AssociativeArray(GmxapiDataHandle):
 #     """Associative data structure providing a key-value map.
@@ -292,6 +290,7 @@ class NDArray(collections.abc.Sequence):
 #     @property
 #     def gmxapi_datatype(self):
 #         return self._dtype
+
 
 class ResultDescription:
     """Describe what will be returned when `result()` is called."""

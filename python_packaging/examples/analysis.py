@@ -44,7 +44,7 @@ class MSMAnalyzer:
 
 
 # Project roadmap notes: Reference FR1 in ../roadmap.rst and ../test/test_fr01.py
-msm_analyzer = gmx.operation.make_operation(MSMAnalyzer,
-                                            input={'topfile': str, 'trajectory': str, 'P': float, 'N': int},
-                                            output={'is_converged': bool, 'transition_matrix': gmx.NDArray(dtype=float)}
-                                            )
+msm_analyzer = gmx.make_operation(MSMAnalyzer,
+                                  input={'topfile': str, 'trajectory': str, 'P': float, 'N': int},
+                                  output={'is_converged': bool, 'transition_matrix': gmx.NDArray}
+                                  )

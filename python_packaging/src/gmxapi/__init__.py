@@ -101,13 +101,16 @@ __all__ = ['commandline_operation',
            'mdrun',
            'ndarray',
            'operation',
-           'read_tpr']
+           'read_tpr',
+           'version',
+           '__version__']
 
 import collections
 import os
 from typing import TypeVar
 
 import gmxapi._logging
+from . import version
 from ._logging import logger
 
 from . import _gmxapi
@@ -119,6 +122,7 @@ from . import exceptions
 from .operation import computed_result, function_wrapper, make_operation
 from .commandline import commandline_operation
 from .datamodel import ndarray, NDArray
+from .version import __version__
 
 
 def mdrun(input=None):
@@ -179,7 +183,7 @@ Scalar = TypeVar('Scalar')
 def concatenate_lists(sublists: list = ()):
     """Combine data sources into a single list.
 
-    A trivial data flow restructuring operation
+    A trivial data flow restructuring operation.
     """
     if isinstance(sublists, (str, bytes)):
         raise exceptions.ValueError('Input must be a list of lists.')
@@ -199,11 +203,11 @@ def make_constant(value: Scalar):
     provides same interface as other gmxapi outputs. Additional constraints or
     guarantees on data type may appear in future versions.
     """
-    # TODO: (FR4+) Manage type compatibility with gmxapi data interfaces.
-    scalar_type = type(value)
-    assert not isinstance(scalar_type, type(None))
-    operation = function_wrapper(output={'data': scalar_type})(lambda data=scalar_type(): data)
-    return operation(data=value).output.data
+    dtype = type(value)
+    source = operation.StaticSourceManager(name='data', proxied_data=value, width=1, function=lambda x: x)
+    description = datamodel.ResultDescription(dtype=dtype, width=1)
+    future = operation.Future(source, 'data', description=description)
+    return future
 
 
 def scatter(array: NDArray) -> datamodel.EnsembleDataSource:
@@ -222,20 +226,43 @@ def scatter(array: NDArray) -> datamodel.EnsembleDataSource:
     """
     if isinstance(array, operation.Future):
         # scatter if possible
-        pass
+        width = array.description.width
+        if width > 1:
+            return datamodel.EnsembleDataSource(source=array, width=width)
+            # Recipient will need to call `result()`.
+        else:
+            raise exceptions.ValueError('No dimension to scatter from.')
     if isinstance(array, datamodel.EnsembleDataSource):
         # scatter if possible
-        pass
+        if array.width > 1:
+            raise exceptions.DataShapeError('Cannot scatter. Only 1-D ensemble data is supported.')
+        array = array.source
+        if isinstance(array, operation.Future):
+            return scatter(array)
+        elif isinstance(array, NDArray):
+            # Get the first meaningful scattering dimension
+            width = 0
+            source = array[:]
+            for scatter_dimension, width in enumerate(array.shape):
+                if width > 1:
+                    break
+                else:
+                    # Strip unused outer dimensions.
+                    source = source[0]
+            if width > 1:
+                return datamodel.EnsembleDataSource(source=source, width=width)
+            else:
+                raise exceptions.ValueError('No dimension to scatter from.')
     if isinstance(array, (str, bytes)):
         raise exceptions.DataShapeError(
             'Strings are not treated as sequences of characters to automatically scatter from.')
     if isinstance(array, collections.abc.Iterable):
         # scatter
-        pass
-    return
+        array = ndarray(array)
+        return scatter(array)
 
 
-def gather(data: datamodel.EnsembleDataSource) -> NDArray:
+def gather(data: datamodel.EnsembleDataSource):
     """Combines parallel data to an NDArray source.
 
     If the data source has an ensemble shape of (1,), result is an NDArray of
@@ -247,23 +274,68 @@ def gather(data: datamodel.EnsembleDataSource) -> NDArray:
     ensemble dimension to an array dimension.
     """
     # TODO: Could be used as part of the clean up for join_arrays to convert a scalar Future to a 1-D list.
-    # Note: gather() is implemented in terms of details of the execution Context.
+    # Note: Clearly, the implementation of gather() is an implementation detail of the execution Context.
+    if hasattr(data, 'width'):
+        if data.width == 1:
+            # TODO: Do we want to allow this silent no-op?
+            if isinstance(data.source, NDArray):
+                return data.source
+            elif isinstance(data.source, operation.Future):
+                raise exceptions.ApiError('gather() not implemented for Future')
+            else:
+                raise exceptions.UsageError('Nothing to gather.')
+
+        assert data.width > 1
+        if isinstance(data.source, operation.Future):
+            manager = operation.ProxyResourceManager(proxied_future=data.source, width=1, function=ndarray)
+        else:
+            if isinstance(data.source, NDArray):
+                raise exceptions.ValueError('higher-dimensional NDArrays not yet implemented.')
+            manager = operation.StaticSourceManager(proxied_data=data.source, width=1, function=ndarray)
+        description = datamodel.ResultDescription(dtype=NDArray, width=1)
+        future = operation.Future(resource_manager=manager, name=data.source.name, description=description)
+        return future
+    else:
+        raise exceptions.TypeError('Expected data with "width".')
 
 
-def logical_not():
-    pass
+def logical_not(value: bool):
+    """Boolean negation.
+
+    If the argument is a gmxapi compatible Data or Future object, a new View or
+    Future is created that proxies the boolean opposite of the input.
+
+    If the argument is a callable, logical_not returns a wrapper function that
+    returns a Future for the logical opposite of the callable's result.
+    """
+    # TODO: Small data transformations like this don't need to be formal Operations.
+    # This could be essentially a data annotation that affects the resolver in a
+    # DataEdge. As an API detail, coding for different Contexts and optimizations
+    # within those Context implementations could be simplified.
+    operation = function_wrapper(output={'data': bool})(lambda data=bool(): not bool(data))
+    return operation(data=value).output.data
 
 
-def subgraph():
-    pass
+# TODO: decide where this lives
+from .operation import subgraph
+
+# TODO: decide where this lives
+from .operation import while_loop
 
 
-def while_loop():
-    pass
+def File(suffix=''):
+    """Placeholder for input/output files.
 
+    Arguments:
+        suffix: string to be appended to actual file name.
 
-def File():
-    pass
+    Note:
+        Some programs have logic influenced by aspects of the text in a file
+        argument. The ``suffix`` key word parameter allows the proxied file's
+        actual name to be constrained when passed as an argument to a program
+        expecting a particular suffix.
+    """
+    assert not version.has_feature('fr21')
 
 
 def modify_input():

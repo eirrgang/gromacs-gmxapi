@@ -48,6 +48,7 @@ instance is run.
 
 The framework ensures that an Operation instance is executed no more than once.
 """
+import sys
 
 __all__ = ['computed_result',
            'function_wrapper',
@@ -55,6 +56,7 @@ __all__ = ['computed_result',
 
 import abc
 import functools
+import importlib.util
 import inspect
 import typing
 import weakref
@@ -294,6 +296,7 @@ class ProxyDataDescriptor(object):
     Subclasses should either not define __init__ or should call the base class
     __init__ explicitly: super().__init__(self, name, dtype)
     """
+
     def __init__(self, name: str, dtype=None):
         self._name = name
         if dtype is not None:
@@ -302,7 +305,46 @@ class ProxyDataDescriptor(object):
         self._dtype = dtype
 
 
-class DataProxyBase(object):
+class DataProxyMeta(type):
+    # Key word arguments consumed by __prepare__
+    _prepare_keywords = ('descriptors',)
+    @classmethod
+    def __prepare__(mcs, name, bases, descriptors: collections.abc.Mapping = None):
+        """Allow dynamic sub-classing.
+
+        DataProxy class definitions are collections of data descriptors. This
+        class method allows subclasses to give the descriptor names and type(s)
+        in the class declaration as arguments instead of as class attribute
+        assignments.
+
+            class MyProxy(DataProxyBase, descriptors={name: MyDescriptor() for name in datanames}): pass
+
+        Note:
+            If we are only using this metaclass for the __prepare__ hook by the
+            time we require Python >= 3.6, we could reimplement __prepare__ as
+            DataProxyBase.__init_subclass__ and remove this metaclass.
+        """
+        if descriptors is None:
+            return {}
+        else:
+            return descriptors
+
+    def __new__(cls, name, bases, namespace, **kwargs):
+        for key in kwargs:
+            if key not in DataProxyMeta._prepare_keywords:
+                raise exceptions.ApiError('Unexpected class creation keyword: {}'.format(key))
+        return type.__new__(cls, name, bases, namespace)
+
+    # TODO: This is keyword argument stripping is not necessary in more recent Python versions.
+    # When Python minimum required version is increased, check if we can remove this.
+    def __init__(cls, name, bases, namespace, **kwargs):
+        for key in kwargs:
+            if key not in DataProxyMeta._prepare_keywords:
+                raise exceptions.ApiError('Unexpected class initialization keyword: {}'.format(key))
+        super().__init__(name, bases, namespace)
+
+
+class DataProxyBase(object, metaclass=DataProxyMeta):
     """Limited interface to managed resources.
 
     Inherit from DataProxy to specialize an interface to an ``instance``.
@@ -337,21 +379,6 @@ class DataProxyBase(object):
     def ensemble_width(self):
         return self._resource_instance.ensemble_width
 
-    def __init_subclass__(cls, descriptors: dict = None, **kwargs):
-        """Allow dynamic sub-classing.
-
-        DataProxy class definitions are collections of data descriptors. This
-        class method allows subclasses to give the descriptor names and type(s)
-        in the class declaration as arguments instead of as class attribute
-        assignments.
-
-            class MyProxy(DataProxyBase, descriptors={name: MyDescriptor() for name in datanames}): pass
-        """
-        super().__init_subclass__(**kwargs)
-        if descriptors is not None:
-            for name, descriptor in descriptors.items():
-                setattr(cls, name, descriptor)
-
 
 class Publisher(ProxyDataDescriptor):
     """Data descriptor for write access to a specific named data resource.
@@ -372,6 +399,7 @@ class Publisher(ProxyDataDescriptor):
     Collaborations:
     Relies on implementation details of ResourceManager.
     """
+
     def __get__(self, instance: DataProxyBase, owner):
         if instance is None:
             # Access through class attribute of owner class
@@ -426,7 +454,7 @@ class SourceResource(abc.ABC):
         return False
 
     @abc.abstractmethod
-    def get(self, name: str):
+    def get(self, name: str) -> 'OutputData':
         return None
 
     @abc.abstractmethod
@@ -435,18 +463,92 @@ class SourceResource(abc.ABC):
         pass
 
 
+class StaticSourceManager(SourceResource):
+    """Provide the resource manager interface for local static data.
+
+    Allow data transformations on the proxied resource.
+
+    Keyword Args:
+        proxied_data: A gmxapi supported data object.
+        width: Size of (one-dimensional) shaped data produced by function.
+        function: Transformation to perform on the managed data.
+
+    The callable passed as ``function`` must accept a single argument. The
+    argument will be an iterable when proxied_data represents an ensemble,
+    or an object of the same type as proxied_data otherwise.
+    """
+    def __init__(self, *, name: str, proxied_data, width: int, function: typing.Callable):
+        assert not isinstance(proxied_data, Future)
+        if hasattr(proxied_data, 'width'):
+            # Ensemble data source
+            assert hasattr(proxied_data, 'source')
+            self._result = function(proxied_data.source)
+        else:
+            self._result = function(proxied_data)
+        if width > 1:
+            if isinstance(self._result, (str, bytes)):
+                # In this case, do not implicitly broadcast
+                raise exceptions.ValueError('"function" produced data incompatible with "width".')
+            else:
+                if not isinstance(self._result, collections.abc.Iterable):
+                    raise exceptions.DataShapeError('Expected iterable of size {} but "function" result is not iterable.')
+            data = list(self._result)
+            size = len(data)
+            if len(data) != width:
+                raise exceptions.DataShapeError('Expected iterable of size {} but "function" produced a {} of size {}'.format(width, type(data), size))
+            dtype = type(data[0])
+        else:
+            if width != 1:
+                raise exceptions.ValueError('width must be an integer 1 or greater.')
+            dtype = type(self._result)
+            if issubclass(dtype, (list, tuple)):
+                dtype = NDArray
+                data = [ndarray(self._result)]
+            elif isinstance(self._result, collections.abc.Iterable):
+                if not isinstance(self._result, (str, bytes)):
+                    raise exceptions.ValueError('Expecting width 1 but "function" produced iterable type {}.'.format(type(self._result)))
+                else:
+                    dtype = str
+                    data = [str(self._result)]
+            else:
+                data = [self._result]
+        description = ResultDescription(dtype=dtype, width=width)
+        self._data = OutputData(name=name, description=description)
+        for member in range(width):
+            self._data.set(data[member], member=member)
+
+    def is_done(self, name: str) -> bool:
+        return True
+
+    def get(self, name: str) -> 'OutputData':
+        return self._data
+
+    def update_output(self):
+        pass
+
+
 class ProxyResourceManager(SourceResource):
     """Act as a resource manager for data managed by another resource manager.
 
     Allow data transformations on the proxied resource.
+
+    Keyword Args:
+        proxied_future: An object implementing the Future interface.
+        width: Size of (one-dimensional) shaped data produced by function.
+        function: Transformation to perform on the result of proxied_future.
+
+    The callable passed as ``function`` must accept a single argument, which will
+    be an iterable when proxied_future represents an ensemble, or an object of
+    type proxied_future.description.dtype otherwise.
     """
 
-    def __init__(self, proxied_future, width: int, function):
+    def __init__(self, proxied_future: 'Future', width: int, function: typing.Callable):
         self._done = False
         self._proxied_future = proxied_future
         self._width = width
         self.name = self._proxied_future.name
         self._result = None
+        assert callable(function)
         self.function = function
 
     def is_done(self, name: str) -> bool:
@@ -459,7 +561,8 @@ class ProxyResourceManager(SourceResource):
             raise exceptions.ProtocolError('Data not ready.')
         result = self.function(self._result)
         if self._width != 1:
-            # TODO Fix this typing nightmare.
+            # TODO Fix this typing nightmare:
+            #  ResultDescription should be fully knowable and defined when the resource manager is initialized.
             data = OutputData(name=self.name, description=ResultDescription(dtype=type(result[0]), width=self._width))
             for member, value in enumerate(result):
                 data.set(value, member)
@@ -521,6 +624,7 @@ class OutputDescriptor(ProxyDataDescriptor):
 
     Knows how to get a Future from the resource manager.
     """
+
     def __get__(self, proxy: DataProxyBase, owner):
         if proxy is None:
             # Access through class attribute of owner class
@@ -1411,11 +1515,22 @@ def make_operation(implementation=None, input: dict = None, output: dict = None,
         class MyOperation(object):
             ...
 
-    :param implementation:
-    :param input:
-    :param output:
-    :param docstring:
-    :return:
+    Each output accessor is guaranteed to be called at most once per operation
+    instance, regardless of the number of references held or the number of times
+    `result()` is called. However, where multiple outputs may or may not be
+    accessed separately, the API does not specify (at this time) whether all of
+    the output accessors will be called or at what time. This behavior may be
+    clarified in a future revision to the API specification or may be left as an
+    implementation detail for the execution context in which the results are
+    accessed.
+
+    Args:
+        implementation:
+        input:
+        output:
+        docstring:
+
+    Returns:
     """
     # If arguments are given, but cls is None, return a partially bound wrapper
     # for use as a decorator.
@@ -1425,7 +1540,256 @@ def make_operation(implementation=None, input: dict = None, output: dict = None,
 
         return decorator
 
-    def factory():
-        pass
+    # else: Define a function to instantiate and run the functor to populate the outputs.
+
+    # Objects produced by the factory may be serialized and deserialized. Among
+    # the simplest cases of recreating operation implementations in other environments,
+    # we use a protocol mapping named operations to importable code.
+    if hasattr(implementation, '__module__') and hasattr(implementation, '__name__'):
+        try:
+            module = importlib.util.resolve_name(implementation.__module__)
+            spec = importlib.util.find_spec(module)
+        except ValueError:
+            spec = None
+    else:
+        raise exceptions.ValueError(
+            'Could not determine an importable module for implementation {}'.format(implementation))
+    # TODO: we can try harder, such as to inspect the __file__ and other hints for something we can import.
+    if spec is None:
+        raise exceptions.UsageError('make_operation can only produce Operations from importable Python code.')
+    else:
+        module = importlib.util.module_from_spec(spec)
+        name = implementation.__name__
+        assert hasattr(module, name)
+
+    logger.info('Generating factory for {} from {}'.format(name, spec))
+
+    # TODO: Use `input` kwarg
+    # to define a InputCollectionDescription and generate documentation for the factory.
+    # We may want to just compile() a new code object.
+    def wrapper(output, **kwargs):
+        obj = implementation(**kwargs)
+        for out in output:
+            setattr(output, out, getattr(obj, out))
+
+    factory = function_wrapper(output=output)(wrapper)
 
     return factory
+
+
+class GraphVariableDescriptor(object):
+    def __init__(self, name: str = None, dtype=None, default=None):
+        self.name = name
+        self.dtype = dtype
+        self.default = default
+        self.state = None
+
+    @property
+    def internal_name(self):
+        try:
+            return '_' + self.name
+        except TypeError:
+            return None
+
+    def __get__(self, instance, owner):
+        if instance is None:
+            # Access is through the class attribute of the owning class.
+            # Allows the descriptor itself to be inspected or reconfigured after
+            # class definition.
+            # TODO: There is probably some usage checking that can be performed here.
+            return self
+        try:
+            value = getattr(instance, self.internal_name)
+        except AttributeError:
+            value = self.default
+            # Lazily initialize the instance value from the class default.
+            if value is not None:
+                try:
+                    setattr(instance, self.internal_name, value)
+                except Exception as e:
+                    message = 'Could not assign default value to {} attribute of {}'.format(
+                        self.internal_name,
+                        instance)
+                    raise exceptions.ApiError(message) from e
+        return value
+
+    # Implementation note: If we have a version of the descriptor class with no `__set__` method,
+    # it is a non-data descriptor that can be overridden by a data descriptor on an instance.
+    # This could be one way to handle the polymorphism associated with state changes.
+    def __set__(self, instance, value):
+        if instance._editing:
+            # Update the internal connections defining the subgraph.
+            setattr(instance, self.internal_name, value)
+        else:
+            raise AttributeError('{} not assignable on {}'.format(self.name, instance))
+
+
+class GraphMeta(type):
+    """Meta-class for gmxapi data flow graphs and subgraphs.
+
+    Used to implement ``subgraph`` as GraphMeta.__new__(...).
+    Also allows subgraphs to be defined as Python class definitions by inheriting
+    from Subgraph or by using the ``metaclass=GraphMeta`` hint in the class
+    statement arguments.
+
+    The Python class creation protocol allows Subgraphs to be defined in as follows.
+
+    See the Subgraph class documentation for customization of instances through
+    the Python context manager protocol.
+    """
+    _prepare_keywords = ('variables',)
+    @classmethod
+    def __prepare__(mcs, name, bases, variables: dict = None, **kwargs):
+        """Prepare the class namespace.
+
+        Keyword Args:
+              variables: mapping of persistent graph variables to type / default value (optional)
+        """
+        # Python runs this before executing the class body of Subgraph or its
+        # subclasses. This is our chance to handle key word arguments given in the
+        # class declaration.
+
+        if kwargs is not None:
+            for keyword in kwargs:
+                raise exceptions.UsageError('Unexpected key word argument: {}'.format(keyword))
+
+        namespace = collections.OrderedDict()
+
+        if variables is not None:
+            if isinstance(variables, collections.abc.Mapping):
+                for name, value in variables.items():
+                    if isinstance(value, type):
+                        dtype = value
+                        if hasattr(value, 'default'):
+                            default = value.default
+                        else:
+                            default = None
+                    else:
+                        default = value
+                        if hasattr(default, 'dtype'):
+                            dtype = default.dtype
+                        else:
+                            dtype = type(default)
+                    namespace[name] = GraphVariableDescriptor(name, default=default, dtype=dtype)
+                    # Note: we are not currently using the hook used by `inspect`
+                    # to annotate with the class that defined the attribute.
+                    # namespace[name].__objclass__ = mcs
+                    assert not hasattr(namespace[name], '__objclass__')
+            else:
+                raise exceptions.ValueError('"variables" must be a mapping of graph variables to types or defaults.')
+
+        return namespace
+
+    def __new__(cls, name, bases, namespace, **kwargs):
+        for key in kwargs:
+            if key not in GraphMeta._prepare_keywords:
+                raise exceptions.ApiError('Unexpected class creation keyword: {}'.format(key))
+        return type.__new__(cls, name, bases, namespace)
+
+    # TODO: This is keyword argument stripping is not necessary in more recent Python versions.
+    # When Python minimum required version is increased, check if we can remove this.
+    def __init__(cls, name, bases, namespace, **kwargs):
+        for key in kwargs:
+            if key not in GraphMeta._prepare_keywords:
+                raise exceptions.ApiError('Unexpected class initialization keyword: {}'.format(key))
+        super().__init__(name, bases, namespace)
+
+
+class Subgraph(object, metaclass=GraphMeta):
+    """
+
+    When subclassing from Subgraph, aspects of the subgraph's data ports can be
+    specified with keyword arguments in the class statement. Example::
+
+        >>> class MySubgraph(Subgraph, variables={'int_with_default': 1, 'boolData': bool}): pass
+        ...
+
+    Keyword Args:
+        variables: Mapping to declare the types of variables with optional default values.
+
+    Execution model:
+        Subgraph execution must follow a well-defined protocol in order to sensibly
+        resolve data Futures at predictable points. Note that subgraphs act as operations
+        that can be automatically redefined at run time (in limited cases), such as
+        to automatically form iteration chains to implement "while" loops. We refer
+        to one copy / iteration / generation of a subgraph as an "element" below.
+
+        When a subgraph element begins execution, each of its variables with an
+        "updated" state from the previous iteration has the "updated" state moved
+        to the new element's "initial" state, and the "updated" state is voided.
+
+        Subgraph.next() appends an element of the subgraph to the chain. Subsequent
+        calls to Subgraph.run() bring the new outputs up to date (and then call next()).
+        Thus, for a subgraph with an output called ``is_converged``, calling
+        ``while (not subgraph.is_converged): subgraph.run()`` has the desired effect,
+        but is likely suboptimal for execution. Instead use the gmxapi while_loop.
+
+        If the subgraph is not currently executing, it can be in one of two states:
+        "editing" or "ready". In the "ready" state, class and instance Variables
+        cannot be assigned, but can be read through the data descriptors. In this
+        state, the descriptors only have a single state.
+
+        If "editing," variables on the class object can be assigned to update the
+        data flow defined for the subgraph. While "editing", reading or writing
+        instance Variables is undefined behavior.
+
+        When "editing" begins, each variable is readable as a proxy to the "initial"
+        state in an element. Assignments while "editing" put variables in temporary
+        states accessible only during editing.
+        When "editing" finishes, the "updated" output data source of each
+        variable for the element is set, if appropriate.
+
+        # TODO: Use a get_context to allow operation factories or accessors to mark
+        #  references for update/annotation when exiting the 'with' block.
+    """
+    def __enter__(self):
+        self._editing = True
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self._editing = False
+        # Returning False causes exceptions in the `with` block to be reraised.
+        # Remember to switch this to return True if we want to transform or suppress
+        # such an exception (we probably do).
+        if exc_type is not None:
+            logger.error('Got exception {} while editing subgraph {}.'.format(exc_val, self))
+            logger.debug('Subgraph exception traceback: \n{}'.format(exc_tb))
+        return False
+
+
+def while_loop(*, operation, condition):
+    """
+
+    Equivalent to calling operation.while(condition), where available.
+
+    Returns an operation instance that acts like a single node in the current
+    work graph.
+    """
+
+
+def subgraph(variables=None):
+    """Declare a Subgraph factory.
+
+    Produces an object used to create a *subgraph*, a fused operation that can
+    be used as a node in a work graph or to create new operations with constructs
+    like ``while_loop``.
+
+    Variables appear as both class attributes and instance attributes.
+
+    A Subgraph can be instantiated as a single-execution operation or as a more
+    complex operation, such as with `while_loop`
+
+    The returned object is a factory containing a definition for a subclass of Subgraph.
+
+    context manager behavior
+    ------------------------
+
+    The Subgraph has Python context manager behavior. Data flow within the
+    subgraph can be configured in the region of a Python ``with`` block.
+
+    When the context manager is entered and exited, the subclass definition is replaced.
+    """
+    class UserSubgraph(Subgraph, variables=variables):
+        pass
+
+    return UserSubgraph()
