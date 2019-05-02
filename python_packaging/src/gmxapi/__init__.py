@@ -35,15 +35,18 @@
 """gmxapi Python package for GROMACS."""
 
 __all__ = ['commandline_operation',
-           'datamodel',
+           'concatenate_lists',
            'exceptions',
+           'function_wrapper',
            'logger',
+           'mdrun',
+           'ndarray',
            'operation',
            'read_tpr']
 
+import collections
 import os
-
-from ._logging import logger
+from typing import TypeVar
 
 from . import _gmxapi
 from . import datamodel
@@ -51,10 +54,10 @@ from . import datamodel
 # from .context import get_context
 from . import datamodel
 from . import exceptions
-from . import operation
+from ._logging import logger
 from .commandline import commandline_operation
-from .datamodel import ndarray
-from .operation import read_tpr
+from .datamodel import ndarray, NDArray
+from .operation import computed_result, function_wrapper
 
 
 def mdrun(input=None):
@@ -82,3 +85,115 @@ def mdrun(input=None):
     except Exception as e:
         raise exceptions.ApiError('Unhandled error from library: {}'.format(e)) from e
     return md
+
+
+@computed_result
+def join_arrays(a: NDArray = (), b: NDArray = ()) -> NDArray:
+    """Operation that consumes two sequences and produces a concatenated single sequence.
+
+    Note that the exact signature of the operation is not determined until this
+    helper is called. Helper functions may dispatch to factories for different
+    operations based on the inputs. In this case, the dtype and shape of the
+    inputs determines dtype and shape of the output. An operation instance must
+    have strongly typed output, but the input must be strongly typed on an
+    object definition so that a Context can make runtime decisions about
+    dispatching work and data before instantiating.
+    # TODO: elaborate and clarify.
+    # TODO: check type and shape.
+    # TODO: figure out a better annotation.
+    """
+    # TODO: (FR4) Returned list should be an NDArray.
+    if isinstance(a, (str, bytes)) or isinstance(b, (str, bytes)):
+        raise exceptions.ValueError('Input must be a pair of lists.')
+    assert isinstance(a, NDArray)
+    assert isinstance(b, NDArray)
+    new_list = list(a._values)
+    new_list.extend(b._values)
+    return new_list
+
+
+Scalar = TypeVar('Scalar')
+
+
+def concatenate_lists(sublists: list = ()):
+    """Combine data sources into a single list.
+
+    A trivial data flow restructuring operation
+    """
+    if isinstance(sublists, (str, bytes)):
+        raise exceptions.ValueError('Input must be a list of lists.')
+    if len(sublists) == 0:
+        return ndarray([])
+    else:
+        return join_arrays(a=sublists[0], b=concatenate_lists(sublists[1:]))
+
+
+def make_constant(value: Scalar):
+    """Provide a predetermined value at run time.
+
+    This is a trivial operation that provides a (typed) value, primarily for
+    internally use to manage gmxapi data flow.
+
+    Accepts a value of any type. The object returned has a definite type and
+    provides same interface as other gmxapi outputs. Additional constraints or
+    guarantees on data type may appear in future versions.
+    """
+    # TODO: (FR4+) Manage type compatibility with gmxapi data interfaces.
+    scalar_type = type(value)
+    assert not isinstance(scalar_type, type(None))
+    operation = function_wrapper(output={'data': scalar_type})(lambda data=scalar_type(): data)
+    return operation(data=value).output.data
+
+
+def scatter(array: NDArray) -> datamodel.EnsembleDataSource:
+    """Convert array data to parallel data.
+
+    Given data with shape (M,N), produce M parallel data sources of shape (N,).
+
+    The intention is to produce ensemble data flows from NDArray sources.
+    Currently, we only support zero and one dimensional data edge cross-sections.
+    In the future, it may be clearer if `scatter()` always converts a non-ensemble
+    dimension to an ensemble dimension or creates an error, but right now there
+    are cases where it is best just to raise a warning.
+
+    If provided data is a string, mapping, or scalar, there is no dimension to
+    scatter from, and DataShapeError is raised.
+    """
+    if isinstance(array, operation.Future):
+        # scatter if possible
+        pass
+    if isinstance(array, datamodel.EnsembleDataSource):
+        # scatter if possible
+        pass
+    if isinstance(array, (str, bytes)):
+        raise exceptions.DataShapeError(
+            'Strings are not treated as sequences of characters to automatically scatter from.')
+    if isinstance(array, collections.abc.Iterable):
+        # scatter
+        pass
+    return
+
+
+def gather(data: datamodel.EnsembleDataSource) -> NDArray:
+    """Combines parallel data to an NDArray source.
+
+    If the data source has an ensemble shape of (1,), result is an NDArray of
+    length 1 if for a scalar data source. For a NDArray data source, the
+    dimensionality of the NDArray is not increased, the original NDArray is
+    produced, and gather() is a no-op.
+
+    This may change in future versions so that gather always converts an
+    ensemble dimension to an array dimension.
+    """
+    # TODO: Could be used as part of the clean up for join_arrays to convert a scalar Future to a 1-D list.
+    # Note: gather() is implemented in terms of details of the execution Context.
+
+
+def logical_and():
+    pass
+
+
+@function_wrapper()
+def read_tpr(tprfile: str = '') -> str:
+    """Prepare simulation input pack from a TPR file."""
+    return tprfile

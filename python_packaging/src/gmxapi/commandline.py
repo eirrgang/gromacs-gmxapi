@@ -40,11 +40,11 @@ __all__ = ['commandline_operation']
 import shutil
 import subprocess
 
+import gmxapi as gmx
 from gmxapi import exceptions
 from gmxapi import logger as root_logger
 from gmxapi.datamodel import NDArray
-from gmxapi.operation import concatenate_lists, function_wrapper, Future, join_arrays, make_constant, \
-    OutputCollectionDescription
+from gmxapi.operation import Future, OutputCollectionDescription
 
 # Module-level logger
 logger = root_logger.getChild(__name__)
@@ -68,7 +68,7 @@ logger.info('Importing gmxapi.commandline_operation')
 #
 # TODO: Operation returns the output object when called with the shorter signature.
 #
-@function_wrapper(output={'erroroutput': str, 'returncode': int})
+@gmx.function_wrapper(output={'erroroutput': str, 'returncode': int})
 def cli(command: NDArray, shell: bool, output: OutputCollectionDescription = None):
     """Execute a command line program in a subprocess.
 
@@ -203,7 +203,7 @@ def filemap_to_flag_list(filemap: dict = None):
                     value.result = lambda function=result_function: [function()]
                 else:
                     value = [value]
-            result = join_arrays(a=result, b=join_arrays(a=[key], b=value))
+            result = gmx.join_arrays(a=result, b=gmx.join_arrays(a=[key], b=value))
     return result
 
 
@@ -249,7 +249,7 @@ def commandline_operation(executable=None,
     # will not be published until the rest of the operation has run (i.e. the cli() executable.)
 
     # TODO: (FR4+) Characterize the dictionary key type: explicitly sequences rather than maybe-string/maybe-sequence-of-strings
-    @function_wrapper(output={'erroroutput': str, 'returncode': int, 'file': dict})
+    @gmx.function_wrapper(output={'erroroutput': str, 'returncode': int, 'file': dict})
     def merged_ops(erroroutput: str = None, returncode: int = None, file: dict = None,
                    output: OutputCollectionDescription = None):
         assert erroroutput is not None
@@ -269,11 +269,11 @@ def commandline_operation(executable=None,
         output_files = {}
     if isinstance(arguments, (str, bytes)):
         arguments = [arguments]
-    command = concatenate_lists([[executable],
+    command = gmx.concatenate_lists([[executable],
                                  arguments,
                                  filemap_to_flag_list(input_files),
                                  filemap_to_flag_list(output_files)])
-    shell = make_constant(False)
+    shell = gmx.make_constant(False)
     cli_args = {'command': command,
                 'shell': shell}
     cli_args.update(**kwargs)

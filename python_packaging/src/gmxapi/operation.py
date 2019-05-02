@@ -50,12 +50,7 @@ The framework ensures that an Operation instance is executed no more than once.
 """
 
 __all__ = ['computed_result',
-           'concatenate_lists',
            'function_wrapper',
-           'gather',
-           'join_arrays',
-           'make_constant',
-           'scatter'
            ]
 
 import abc
@@ -63,7 +58,6 @@ import functools
 import inspect
 import weakref
 from contextlib import contextmanager
-from typing import TypeVar
 
 import gmxapi as gmx
 from gmxapi import logger as root_logger
@@ -129,64 +123,6 @@ def computed_result(function):
         return output.data
 
     return new_function
-
-
-@computed_result
-def join_arrays(a: NDArray = (), b: NDArray = ()) -> NDArray:
-    """Operation that consumes two sequences and produces a concatenated single sequence.
-
-    Note that the exact signature of the operation is not determined until this
-    helper is called. Helper functions may dispatch to factories for different
-    operations based on the inputs. In this case, the dtype and shape of the
-    inputs determines dtype and shape of the output. An operation instance must
-    have strongly typed output, but the input must be strongly typed on an
-    object definition so that a Context can make runtime decisions about
-    dispatching work and data before instantiating.
-    # TODO: elaborate and clarify.
-    # TODO: check type and shape.
-    # TODO: figure out a better annotation.
-    """
-    # TODO: (FR4) Returned list should be an NDArray.
-    if isinstance(a, (str, bytes)) or isinstance(b, (str, bytes)):
-        raise exceptions.ValueError('Input must be a pair of lists.')
-    assert isinstance(a, NDArray)
-    assert isinstance(b, NDArray)
-    new_list = list(a._values)
-    new_list.extend(b._values)
-    return new_list
-
-
-Scalar = TypeVar('Scalar')
-
-
-def concatenate_lists(sublists: list = ()):
-    """Combine data sources into a single list.
-
-    A trivial data flow restructuring operation
-    """
-    if isinstance(sublists, (str, bytes)):
-        raise exceptions.ValueError('Input must be a list of lists.')
-    if len(sublists) == 0:
-        return ndarray([])
-    else:
-        return join_arrays(a=sublists[0], b=concatenate_lists(sublists[1:]))
-
-
-def make_constant(value: Scalar):
-    """Provide a predetermined value at run time.
-
-    This is a trivial operation that provides a (typed) value, primarily for
-    internally use to manage gmxapi data flow.
-
-    Accepts a value of any type. The object returned has a definite type and
-    provides same interface as other gmxapi outputs. Additional constraints or
-    guarantees on data type may appear in future versions.
-    """
-    # TODO: (FR4+) Manage type compatibility with gmxapi data interfaces.
-    scalar_type = type(value)
-    assert not isinstance(scalar_type, type(None))
-    operation = function_wrapper(output={'data': scalar_type})(lambda data=scalar_type(): data)
-    return operation(data=value).output.data
 
 
 class OutputCollectionDescription(collections.OrderedDict):
@@ -1090,53 +1026,6 @@ class ResourceManager(SourceResource):
         under what circumstances one may be obtained.
         """
         # Localize data
-
-        # TODO: (FR3+) be more rigorous.
-        #  This should probably also use a sort of Context-based observer pattern rather than
-        #  the result() method, which is explicitly for moving data across the API boundary.
-        # args = []
-        # try:
-        #     for arg in self._input_fingerprint.args:
-        #         value = arg
-        #         if hasattr(value, 'result'):
-        #             value = value.result()
-        #         args.append(value)
-        # except Exception as E:
-        #     raise exceptions.ApiError('input_fingerprint not iterating on "args" attr as expected.') from E
-
-        # kwargs = {}
-        # try:
-        #     for key, value in self._input_fingerprint.items():
-        #         if hasattr(value, 'run'):
-        #             # TODO: Do we still have these?
-        #             logger.debug('Calling run() for execution-only dependency {}.'.format(key))
-        #             value.run()
-        #             continue
-        #
-        #         if hasattr(value, 'result'):
-        #             kwargs[key] = value.result()
-        #         else:
-        #             kwargs[key] = value
-        #         if isinstance(kwargs[key], list):
-        #             new_list = []
-        #             for item in kwargs[key]:
-        #                 if hasattr(item, 'result'):
-        #                     new_list.append(item.result())
-        #                 else:
-        #                     new_list.append(item)
-        #             kwargs[key] = new_list
-        #         try:
-        #             for item in kwargs[key]:
-        #                 # TODO: This should not happen. Need proper tools for NDArray Futures.
-        #                 # assert not hasattr(item, 'result')
-        #                 if hasattr(item, 'result'):
-        #                     kwargs[key][item] = item.result()
-        #         except TypeError:
-        #             # This is only a test for iterables
-        #             pass
-        # except Exception as E:
-        #     raise exceptions.ApiError('input_fingerprint not iterating on "kwargs" attr as expected.') from E
-
         kwargs = self._input_edge.sink(node=member)
         assert 'input' not in kwargs
 
@@ -1499,43 +1388,3 @@ def function_wrapper(output: dict = None):
         return factory
 
     return decorator
-
-
-def scatter(array: NDArray) -> EnsembleDataSource:
-    """Convert array data to parallel data.
-
-    Given data with shape (M,N), produce M parallel data sources of shape (N,).
-
-    The intention is to produce ensemble data flows from NDArray sources.
-    Currently, we only support zero and one dimensional data edge cross-sections.
-    In the future, it may be clearer if `scatter()` always converts a non-ensemble
-    dimension to an ensemble dimension or creates an error, but right now there
-    are cases where it is best just to raise a warning.
-
-    If provided data is a string, mapping, or scalar, there is no dimension to
-    scatter from and DataShapeError is raised.
-
-    If an ensemble dimension is already present, scatter() must be able to match
-    the size of that dimension or raises a DataShapeError.
-    """
-
-
-def gather(data: EnsembleDataSource) -> NDArray:
-    """Combines parallel data to an NDArray source.
-
-    If the data source has an ensemble shape of (1,), result is an NDArray of
-    length 1 if for a scalar data source. For a NDArray data source, the
-    dimensionality of the NDArray is not increased, the original NDArray is
-    produced, and gather() is a no-op.
-
-    This may change in future versions so that gather always converts an
-    ensemble dimension to an array dimension.
-    """
-    # TODO: Could be used as part of the clean up for join_arrays to convert a scalar Future to a 1-D list.
-    # Note: gather() is implemented in terms of details of the execution Context.
-
-
-@function_wrapper()
-def read_tpr(tprfile: str = '') -> str:
-    """Prepare simulation input pack from a TPR file."""
-    return tprfile
