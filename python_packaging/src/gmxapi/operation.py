@@ -56,6 +56,7 @@ __all__ = ['computed_result',
 import abc
 import functools
 import inspect
+import typing
 import weakref
 from contextlib import contextmanager
 
@@ -287,6 +288,20 @@ class InputCollectionDescription(collections.OrderedDict):
         return DataSourceCollection(**input_kwargs)
 
 
+class ProxyDataDescriptor(object):
+    """Base class for data descriptors used in DataProxyBase subclasses.
+
+    Subclasses should either not define __init__ or should call the base class
+    __init__ explicitly: super().__init__(self, name, dtype)
+    """
+    def __init__(self, name: str, dtype=None):
+        self._name = name
+        if dtype is not None:
+            assert isinstance(dtype, type)
+            assert issubclass(dtype, (str, bool, int, float, dict, NDArray))
+        self._dtype = dtype
+
+
 class DataProxyBase(object):
     """Limited interface to managed resources.
 
@@ -322,8 +337,23 @@ class DataProxyBase(object):
     def ensemble_width(self):
         return self._resource_instance.ensemble_width
 
+    def __init_subclass__(cls, descriptors: dict = None, **kwargs):
+        """Allow dynamic sub-classing.
 
-class Publisher(object):
+        DataProxy class definitions are collections of data descriptors. This
+        class method allows subclasses to give the descriptor names and type(s)
+        in the class declaration as arguments instead of as class attribute
+        assignments.
+
+            class MyProxy(DataProxyBase, descriptors={name: MyDescriptor() for name in datanames}): pass
+        """
+        super().__init_subclass__(**kwargs)
+        if descriptors is not None:
+            for name, descriptor in descriptors.items():
+                setattr(cls, name, descriptor)
+
+
+class Publisher(ProxyDataDescriptor):
     """Data descriptor for write access to a specific named data resource.
 
     For a wrapped function receiving an ``output`` argument, provides the
@@ -342,12 +372,6 @@ class Publisher(object):
     Collaborations:
     Relies on implementation details of ResourceManager.
     """
-
-    def __init__(self, name: str):
-        # self._input = Input(input.args, input.kwargs, input.dependencies)
-        # self._instance = instance
-        self.name = name
-
     def __get__(self, instance: DataProxyBase, owner):
         if instance is None:
             # Access through class attribute of owner class
@@ -355,17 +379,17 @@ class Publisher(object):
         resource_manager = instance._resource_instance
         client_id = instance._client_identifier
         if client_id is None:
-            return getattr(resource_manager._data, self.name)
+            return getattr(resource_manager._data, self._name)
         else:
-            return getattr(resource_manager._data, self.name)[client_id]
+            return getattr(resource_manager._data, self._name)[client_id]
 
     def __set__(self, instance: DataProxyBase, value):
         resource_manager = instance._resource_instance
         client_id = instance._client_identifier
-        resource_manager.set_result(name=self.name, value=value, member=client_id)
+        resource_manager.set_result(name=self._name, value=value, member=client_id)
 
     def __repr__(self):
-        return 'Publisher(name={}, dtype={})'.format(self.name, self.dtype.__qualname__)
+        return 'Publisher(name={}, dtype={})'.format(self._name, self._dtype.__qualname__)
 
 
 def define_publishing_data_proxy(output_description):
@@ -374,15 +398,15 @@ def define_publishing_data_proxy(output_description):
     # We should encapsulate these relationships in Context details, explicit collaborations
     # between specific operations and Contexts, and in groups of Operation definition helpers.
 
-    # Dynamically define a type for the PublishingDataProxy using a descriptor for each attribute.
-    # TODO: Encapsulate this bit of script in a metaclass definition?
-    namespace = {}
-    # Note: uses `output` from outer closure
-    for name, dtype in output_description.items():
-        namespace[name] = Publisher(name)
-    namespace['__doc__'] = "Handler for write access to the `output` of an operation.\n\n" + \
-                           "Acts as a sort of PublisherCollection."
-    return type('PublishingDataProxy', (DataProxyBase,), namespace)
+    descriptors = {name: Publisher(name) for name in output_description}
+
+    class PublishingDataProxy(DataProxyBase, descriptors=descriptors):
+        """Handler for write access to the `output` of an operation.
+
+        Acts as a sort of PublisherCollection.
+        """
+
+    return PublishingDataProxy
 
 
 class SourceResource(abc.ABC):
@@ -492,28 +516,23 @@ class Future(object):
         return future
 
 
-class OutputDescriptor(object):
+class OutputDescriptor(ProxyDataDescriptor):
     """Read-only data descriptor for proxied output access.
 
     Knows how to get a Future from the resource manager.
     """
-
-    def __init__(self, name, dtype):
-        self.name = name
-        assert isinstance(dtype, type)
-        assert issubclass(dtype, (str, bool, int, float, dict, NDArray))
-        self.dtype = dtype
-
     def __get__(self, proxy: DataProxyBase, owner):
         if proxy is None:
             # Access through class attribute of owner class
             return self
-        result_description = gmx.datamodel.ResultDescription(dtype=self.dtype, width=proxy.ensemble_width)
-        return proxy._resource_instance.future(name=self.name, description=result_description)
+        result_description = gmx.datamodel.ResultDescription(dtype=self._dtype, width=proxy.ensemble_width)
+        return proxy._resource_instance.future(name=self._name, description=result_description)
 
 
 def define_output_data_proxy(output_description: OutputCollectionDescription):
-    class OutputDataProxy(DataProxyBase):
+    descriptors = {name: OutputDescriptor(name, description) for name, description in output_description.items()}
+
+    class OutputDataProxy(DataProxyBase, descriptors=descriptors):
         """Handler for read access to the `output` member of an operation handle.
 
         Acts as a sort of ResultCollection.
@@ -521,19 +540,10 @@ def define_output_data_proxy(output_description: OutputCollectionDescription):
         A ResourceManager creates an OutputDataProxy instance at initialization to
         provide the ``output`` property of an operation handle.
         """
-        # TODO: Needs to know the output schema of the operation,
-        #  so type definition is a detail of the operation definition.
-        #  (Could be "templated" on Context type)
-        # TODO: (FR3+) We probably want some other container behavior,
-        #  in addition to the attributes...
 
     # Note: the OutputDataProxy has an inherent ensemble shape in the context
     # in which it is used, but that is an instance characteristic, not part of this type definition.
-
-    for name, description in output_description.items():
-        # TODO: (FR5) The current tool does not support topology changing operations.
-        setattr(OutputDataProxy, name, OutputDescriptor(name, description))
-
+    # TODO: (FR5) The current tool does not support topology changing operations.
     return OutputDataProxy
 
 
@@ -861,7 +871,7 @@ class ResourceManager(SourceResource):
         # ref: https://docs.python.org/3/library/contextlib.html#contextlib.contextmanager
         try:
             if not self._done[ensemble_member]:
-                resource = self._operation.PublishingDataProxy(weakref.proxy(self), ensemble_member)
+                resource = self._operation.publishing_data_proxy(weakref.proxy(self), ensemble_member)
                 yield resource
         except Exception as e:
             message = 'Uncaught exception while providing output-publishing resources for {}.'.format(self._runner)
@@ -1011,7 +1021,7 @@ class ResourceManager(SourceResource):
 
     def data(self):
         """Get an adapter to the output resources to access results."""
-        return self._operation.OutputDataProxy(self)
+        return self._operation.output_data_proxy(self)
 
     @contextmanager
     def local_input(self, member: int = None):
@@ -1175,11 +1185,11 @@ class OperationDetails(object):
         return datastore
 
     @property
-    def OutputDataProxy(self):
+    def output_data_proxy(self):
         return self._output_data_proxy
 
     @property
-    def PublishingDataProxy(self):
+    def publishing_data_proxy(self):
         return self._publishing_data_proxy
 
     def resource_director(self, input=None, output=None):
@@ -1388,3 +1398,34 @@ def function_wrapper(output: dict = None):
         return factory
 
     return decorator
+
+
+def make_operation(implementation=None, input: dict = None, output: dict = None, docstring=None) -> typing.Callable:
+    """Generate a factory function for an Operation implemented in a class.
+
+    For an Operation implemented as a function, see function_wrapper().
+
+    Can also be used as a parameterized class decorator.
+
+        @make_operation(input={...}, output={...})
+        class MyOperation(object):
+            ...
+
+    :param implementation:
+    :param input:
+    :param output:
+    :param docstring:
+    :return:
+    """
+    # If arguments are given, but cls is None, return a partially bound wrapper
+    # for use as a decorator.
+    if implementation is None:
+        def decorator(cls):
+            return make_operation(cls, input=input, output=output, docstring=docstring)
+
+        return decorator
+
+    def factory():
+        pass
+
+    return factory

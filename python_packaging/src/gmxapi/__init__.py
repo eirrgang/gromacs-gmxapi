@@ -32,13 +32,72 @@
 # To help us fund GROMACS development, we humbly ask that you cite
 # the research papers on the package. Check out http://www.gromacs.org.
 
-"""gmxapi Python package for GROMACS."""
+"""gmxapi Python package for GROMACS.
+
+This package provides Python access to GROMACS molecular simulation tools.
+Operations can be connected flexibly to allow high performance simulation and
+analysis with complex control and data flows. Users can define new operations
+in C++ or Python with the same tool kit used to implement this package.
+
+Simulation Operations
+---------------------
+
+* mdrun()
+* modify_input()
+* read_tpr()
+
+Data flow operations
+--------------------
+
+* logical_and()
+* logical_or()
+* logical_not()
+* reduce()
+* scatter()
+* gather()
+* subgraph()
+* while_loop()
+
+Extension
+---------
+
+* commandline_wrapper()
+* make_operation()
+* function_wrapper()
+
+Data
+----
+
+Basic Data Types
+~~~~~~~~~~~~~~~~
+
+* Integer
+* Float
+* Boolean
+
+Containers
+~~~~~~~~~~
+
+* NDArray
+* String
+* AssociativeArray
+
+Proxies
+-------
+
+* File()
+* Future()
+* Handle()
+
+"""
+from gmxapi import _logging
 
 __all__ = ['commandline_operation',
            'concatenate_lists',
            'exceptions',
            'function_wrapper',
            'logger',
+           'make_operation',
            'mdrun',
            'ndarray',
            'operation',
@@ -48,16 +107,18 @@ import collections
 import os
 from typing import TypeVar
 
+import gmxapi._logging
+from ._logging import logger
+
 from . import _gmxapi
 from . import datamodel
 # from .context import ContextCharacteristics as ContextCharacteristics
 # from .context import get_context
 from . import datamodel
 from . import exceptions
-from ._logging import logger
+from .operation import computed_result, function_wrapper, make_operation
 from .commandline import commandline_operation
 from .datamodel import ndarray, NDArray
-from .operation import computed_result, function_wrapper
 
 
 def mdrun(input=None):
@@ -189,7 +250,23 @@ def gather(data: datamodel.EnsembleDataSource) -> NDArray:
     # Note: gather() is implemented in terms of details of the execution Context.
 
 
-def logical_and():
+def logical_not():
+    pass
+
+
+def subgraph():
+    pass
+
+
+def while_loop():
+    pass
+
+
+def File():
+    pass
+
+
+def modify_input():
     pass
 
 
