@@ -32,33 +32,36 @@
 # To help us fund GROMACS development, we humbly ask that you cite
 # the research papers on the package. Check out http://www.gromacs.org.
 
-"""Test gmxapi functionality described in roadmap.rst."""
-
-import pytest
-
 import gmxapi as gmx
-from gmxapi.version import has_feature
+import pytest
+from gmxapi.operation import Subgraph
 
 
-@pytest.mark.xfail
-@pytest.mark.skipif(not has_feature('fr4'),
-                    reason="Feature level not met.")
-def test_fr4(spc216):
-    """FR4: Dimensionality and typing of named data causes generation of correct work topologies."""
-    N = 10
-    simulation_input = gmx.read_tpr(spc216)
+@gmx.function_wrapper(output={'data': float})
+def add_float(a: float, b: float) -> float:
+    return a + b
 
-    # Array inputs imply array outputs.
-    input_array = gmx.modify_input(
-        simulation_input, params=gmx.scatter([{'tau-t': t / 10.0} for t in range(N)]))
+#
+# def test_subgraph_class():
+#     class MySubgraph(Subgraph, variables={'int_with_default': 1, 'boolData': bool}):
+#         """Testable subgraph."""
+#         # Subgraph.get_variable('int_with_default')
+#         # data = gmx.make_constant(int_with_default)
+#
+#     subgraph = MySubgraph()
+#     assert hasattr(MySubgraph, 'int_with_default')
+#     assert hasattr(subgraph, 'int_with_default')
+#     assert subgraph.int_with_default == 1
 
-    md = gmx.mdrun(input_array)  # An array of simulations
 
-    rmsf = gmx.commandline_operation(
-        'gmx',
-        'rmsf',
-        input={
-            '-f': md.output.trajectory,
-            '-s': spc216
-        },
-        output={'-o': gmx.FileName(suffix='.xvg')})
+@pytest.mark.skip(reason='not implemented')
+def test_subgraph_function():
+    subgraph = gmx.subgraph(variables={'float_with_default': 1.0})
+    with subgraph:
+        data = gmx.make_constant(subgraph.float_with_default)
+        subgraph.float_with_default = add_float(data, 1)
+
+
+@pytest.mark.skip(reason='not implemented')
+def test_assumptions():
+    assert add_float(1., 1.).output.data.result() == 2

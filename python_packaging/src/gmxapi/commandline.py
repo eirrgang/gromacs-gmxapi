@@ -40,9 +40,11 @@ __all__ = ['commandline_operation']
 import shutil
 import subprocess
 
+import gmxapi as gmx
 from gmxapi import exceptions
 from gmxapi import logger as root_logger
-from gmxapi.operation import function_wrapper, concatenate_lists, make_constant
+from gmxapi.datamodel import NDArray
+from gmxapi.operation import Future, OutputCollectionDescription
 
 # Module-level logger
 logger = root_logger.getChild(__name__)
@@ -66,8 +68,8 @@ logger.info('Importing gmxapi.commandline_operation')
 #
 # TODO: Operation returns the output object when called with the shorter signature.
 #
-@function_wrapper(output={'erroroutput': str, 'returncode': int})
-def cli(command: list = None, shell: bool = None, output=None):
+@gmx.function_wrapper(output={'erroroutput': str, 'returncode': int})
+def cli(command: NDArray, shell: bool, output: OutputCollectionDescription):
     """Execute a command line program in a subprocess.
 
     Configure an executable in a subprocess. Executes when run in an execution
@@ -172,7 +174,7 @@ def cli(command: list = None, shell: bool = None, output=None):
 # TODO: (FR4) Make this a formal operation to properly handle gmxapi data dependencies.
 #  The consumer of this operation has an NDArray input. filemap may contain gmxapi data flow
 #  aspects that we want the framework to handle for us.
-def filemap_to_flag_list(filemap=None):
+def filemap_to_flag_list(filemap: dict = None):
     """Convert a map of command line flags and filenames to a list of command line arguments.
 
     Used to map inputs and outputs of command line tools to and from gmxapi data handles.
@@ -188,12 +190,21 @@ def filemap_to_flag_list(filemap=None):
     Returns:
         list of strings and/or gmxapi data references
     """
-    flag_list = []
+    result = []
     if filemap is not None:
-        for flag, value in filemap.items():
-            flag_list.extend((flag, value))
-    # TODO: (FR4) Should be a NDArray(shape=(1,), dtype=str)
-    return flag_list
+        for key, value in filemap.items():
+            # Note that the value may be a string, a list, an ndarray, or a future
+            if not isinstance(value, (list, tuple, NDArray)):
+                if hasattr(value, 'result') and value.dtype == NDArray:
+                    pass
+                elif hasattr(value, 'result') and value.dtype != NDArray:
+                    # TODO: Fix this ugly hack when we have proper Future slicing and can make NDArray futures.
+                    result_function = value.result
+                    value.result = lambda function=result_function: [function()]
+                else:
+                    value = [value]
+            result = gmx.join_arrays(a=result, b=gmx.join_arrays(a=[key], b=value))
+    return result
 
 
 # TODO: (FR4) Use generating function or decorator that can validate kwargs?
@@ -237,8 +248,10 @@ def commandline_operation(executable=None,
     # output_files is essentially passed through, but we need assurance that results
     # will not be published until the rest of the operation has run (i.e. the cli() executable.)
 
-    @function_wrapper(output={'erroroutput': str, 'returncode': int, 'file': dict})
-    def merged_ops(erroroutput: str = None, returncode: int = None, file: dict = None, output=None):
+    # TODO: (FR4+) Characterize the dictionary key type: explicitly sequences rather than maybe-string/maybe-sequence-of-strings
+    @gmx.function_wrapper(output={'erroroutput': str, 'returncode': int, 'file': dict})
+    def merged_ops(erroroutput: str = None, returncode: int = None, file: dict = None,
+                   output: OutputCollectionDescription = None):
         assert erroroutput is not None
         assert returncode is not None
         assert file is not None
@@ -256,11 +269,11 @@ def commandline_operation(executable=None,
         output_files = {}
     if isinstance(arguments, (str, bytes)):
         arguments = [arguments]
-    command = concatenate_lists([[executable],
+    command = gmx.concatenate_lists([[executable],
                                  arguments,
                                  filemap_to_flag_list(input_files),
                                  filemap_to_flag_list(output_files)])
-    shell = make_constant(False)
+    shell = gmx.make_constant(False)
     cli_args = {'command': command,
                 'shell': shell}
     cli_args.update(**kwargs)
@@ -269,9 +282,10 @@ def commandline_operation(executable=None,
     # 3. Merge operations
     #
     # Note: Without a `label` argument, repeated calls to cli(**cli_args) should
-    # produce references to the same unique resource. Creating this handle
-    # separately should not be necessary, but we've got a way to go until we have the
-    # fingerprinting and Context resource management we need for that.
+    # produce references to the same unique resource (but currently do not).
+    # Creating this handle separately should not be necessary,
+    # but we've got a way to go until we have the fingerprinting and Context
+    # resource management we need for that.
     # TODO: ``label`` kwarg
     # TODO: input fingerprinting
     cli_result = cli(**cli_args)

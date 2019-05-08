@@ -78,7 +78,7 @@ class SimpleCliTestCase(unittest.TestCase):
 
     def test_echo(self):
         # TODO: (FR5+) do we want to pipeline or checkpoint stdout somehow?
-        operation = commandline.cli(command=[shutil.which('echo'), 'hi', 'there'])
+        operation = commandline.cli(command=[shutil.which('echo'), 'hi', 'there'], shell=False)
         assert operation.output.returncode.result() == 0
 
 
