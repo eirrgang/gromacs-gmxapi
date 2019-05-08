@@ -462,6 +462,15 @@ class SourceResource(abc.ABC):
         """Bring the _data member up to date and local."""
         pass
 
+    @abc.abstractmethod
+    def reset(self):
+        """Recursively reinitialize resources.
+
+        Set the resource manager to its initialized state.
+        All outputs are marked not "done".
+        All inputs supporting the interface have ``_reset()`` called on them.
+        """
+
 
 class StaticSourceManager(SourceResource):
     """Provide the resource manager interface for local static data.
@@ -526,6 +535,9 @@ class StaticSourceManager(SourceResource):
     def update_output(self):
         pass
 
+    def reset(self):
+        pass
+
 
 class ProxyResourceManager(SourceResource):
     """Act as a resource manager for data managed by another resource manager.
@@ -550,6 +562,11 @@ class ProxyResourceManager(SourceResource):
         self._result = None
         assert callable(function)
         self.function = function
+
+    def reset(self):
+        self._done = False
+        self._proxied_future._reset()
+        self._result = None
 
     def is_done(self, name: str) -> bool:
         return self._done
@@ -576,7 +593,25 @@ class ProxyResourceManager(SourceResource):
         self._done = True
 
 
+# Preliminary hack: implement reset() for operations.
+# Step -1: implement observer interface rebind()
+# Step 0: implement subject interface subscribe()
+# Step 1: implement subject interface get_state()
+# Step 2: implement observer interface update()
+# Step 3: implement subject interface notify()
+# class Observer(object):
+#     """Abstract base class for data observers."""
+#     def rebind(self, edge: DataEdge):
+#         """Recreate the Operation at the consuming end of the DataEdge."""
+
+
 class Future(object):
+    """
+
+    Future is currently more than a Future right now. (should be corrected / clarified.)
+    Future is also a facade to other features of the data provider. The ``subscribe``
+    method allows consumers to bind as Observers.
+    """
     def __init__(self, resource_manager: SourceResource, name: str, description: gmx.datamodel.ResultDescription):
         self.name = name
         if not isinstance(description, gmx.datamodel.ResultDescription):
@@ -596,6 +631,18 @@ class Future(object):
         # Return ownership of concrete data
         handle = self.resource_manager.get(self.name)
         return handle.data
+
+    def _reset(self):
+        """Mark the Future "not done" to allow reexecution.
+
+        Invalidates cached results, resets "done" markers in data sources, and
+        triggers _reset recursively.
+
+        Note: this is a hack that is inconsistent with the plan of unique mappings
+        of inputs to outputs, but allows a quick prototype for looping operations.
+        """
+        self.resource_manager.reset()
+        assert not self.resource_manager.is_done(self.name)
 
     @property
     def dtype(self):
@@ -715,7 +762,9 @@ class SinkTerminal(object):
     Collaborations: Required for creation of a DataEdge. Created with knowledge
     of a DataSourceCollection instance and a InputCollectionDescription.
     """
-
+    # TODO: This clearly maps to a Builder pattern.
+    # I think we want to get the sink terminal builder from a factory parameterized by InputCollectionDescription,
+    # add data source collections, and then build the sink terminal for the data edge.
     def __init__(self, input_collection_description: InputCollectionDescription):
         """Define an appropriate data sink for a new operation node.
 
@@ -819,6 +868,7 @@ class DataEdge(object):
         # Adapters are callables that transform a source and node ID to local data.
         # Every key in the sink has an adapter.
         self.adapters = {}
+        self.source_collection = source_collection
         self.sink_terminal = sink_terminal
         for name in sink_terminal.inputs:
             if name not in source_collection:
@@ -859,6 +909,9 @@ class DataEdge(object):
                 else:
                     assert isinstance(source, EnsembleDataSource)
                     self.adapters[name] = lambda member, source=source: source.node(member)
+
+    def reset(self):
+        self.source_collection.reset()
 
     def resolve(self, key: str, member: int):
         return self.adapters[key](member=member)
@@ -1014,6 +1067,15 @@ class ResourceManager(SourceResource):
         self._runner = runner
         self.__operation_entrance_counter = 0
 
+    def reset(self):
+        self.__operation_entrance_counter = 0
+        self._done = [False] * self.ensemble_width
+        self.__publishing_resources = [self.__publishing_context]
+        for data in self._data.values():
+            data.reset()
+        self._input_edge.reset()
+        assert self.__operation_entrance_counter == 0
+
     def done(self, member=None):
         if member is None:
             return all(self._done)
@@ -1029,14 +1091,6 @@ class ResourceManager(SourceResource):
         except TypeError:
             # Ignore when `item` is not iterable.
             pass
-        # type_annotation = self._data[name].dtype
-        # type_caster = self._data[name].dtype
-        # if type_caster == NDArray:
-        #     type_caster = gmx.datamodel.ndarray
-        # self._data[name] = Output(name=name,
-        #                           dtype=type_annotation,
-        #                           done=True,
-        #                           data=type_caster(value))
         self._data[name].set(value=value, member=member)
 
     def is_done(self, name):
@@ -1742,6 +1796,9 @@ class Subgraph(object, metaclass=GraphMeta):
         # TODO: Use a get_context to allow operation factories or accessors to mark
         #  references for update/annotation when exiting the 'with' block.
     """
+    # TODO: Use GraphMeta.__prepare__ to create an object that captures every assignment
+    #  in the class body to be replayed on each iteration of the while loop.
+
     def __enter__(self):
         self._editing = True
         return self
@@ -1758,38 +1815,95 @@ class Subgraph(object, metaclass=GraphMeta):
 
 
 def while_loop(*, operation, condition):
-    """
+    """Generate and run a chain of operations such that condition evaluates True.
+
+    Returns and operation instance that acts like a single node in the current
+    work graph, but which is a proxy to the operation at the end of a dynamically generated chain
+    of operations. At run time, condition is evaluated for the last element in
+    the current chain. If condition evaluates False, the chain is extended and
+    the next element is executed. When condition evaluates True, the object
+    returned by ``while_loop`` becomes a proxy for the last element in the chain.
 
     Equivalent to calling operation.while(condition), where available.
 
-    Returns an operation instance that acts like a single node in the current
-    work graph.
-    """
+    Arguments:
+        operation: a callable that produces an instance of an operation when called with no arguments.
+        condition: a callable that accepts an object (returned by ``operation``) that returns a boolean.
 
+    Warning:
+        The protocol by which ``while_loop`` interacts with ``operation`` and ``condition``
+        is very unstable right now. Please refer to this documentation when installing new
+        versions of the package.
+
+    Protocol:
+        Warning:
+            This protocol will be changed before the 0.1 API is finalized.
+
+        When called, ``while_loop`` calls ``operation`` without arguments
+        and captures the return value captured as ``_operation``.
+        The object produced by ``operation()`` must have a ``reset``,
+        a ``run`` method, and an ``output`` attribute.
+
+        This is inspected
+        to determine the output data proxy for the operation produced by the call
+        to ``while_loop``. When that operation is called, it does the equivalent of
+
+            while(condition(self._operation)):
+                self._operation.reset()
+                self._operation.run()
+
+        Then, the output data proxy of ``self`` is updated with the results from
+        self._operation.output.
+
+    """
+    def run_loop():
+        obj = operation()
+        while (not condition(obj)):
+            obj.reset()
+            obj.run()
+        return obj
+    return run_loop
+
+# def subgraph(variables=None):
+#     """Declare a Subgraph factory.
+#
+#     Produces an object used to create a *subgraph*, a fused operation that can
+#     be used as a node in a work graph or to create new operations with constructs
+#     like ``while_loop``.
+#
+#     Variables appear as both class attributes and instance attributes.
+#
+#     A Subgraph can be instantiated as a single-execution operation or as a more
+#     complex operation, such as with `while_loop`
+#
+#     The returned object is a factory containing a definition for a subclass of Subgraph.
+#
+#     context manager behavior
+#     ------------------------
+#
+#     The Subgraph has Python context manager behavior. Data flow within the
+#     subgraph can be configured in the region of a Python ``with`` block.
+#
+#     When the context manager is entered and exited, the subclass definition is replaced.
+#     """
+#     class UserSubgraph(Subgraph, variables=variables):
+#         pass
+#
+#     return UserSubgraph()
 
 def subgraph(variables=None):
-    """Declare a Subgraph factory.
+    """Make a fused operation that can be used in a gmxapi.while_loop.
 
-    Produces an object used to create a *subgraph*, a fused operation that can
-    be used as a node in a work graph or to create new operations with constructs
-    like ``while_loop``.
+    The object returned functions as a Python context manager. When entering the
+    context manager (the beginning of the ``with`` block), the object has an
+    attribute for each of the named ``variables``. Reading from these variables
+    gets a proxy for the initial value or its update from a previous loop iteration.
+    At the end of the ``with`` block, any values or data flows assigned to these
+    attributes become the output for an iteration.
 
-    Variables appear as both class attributes and instance attributes.
+    After leaving the ``with`` block, the variables are no longer assignable, but
+    can be called as bound methods to get the current value of a variable.
 
-    A Subgraph can be instantiated as a single-execution operation or as a more
-    complex operation, such as with `while_loop`
-
-    The returned object is a factory containing a definition for a subclass of Subgraph.
-
-    context manager behavior
-    ------------------------
-
-    The Subgraph has Python context manager behavior. Data flow within the
-    subgraph can be configured in the region of a Python ``with`` block.
-
-    When the context manager is entered and exited, the subclass definition is replaced.
+    When the object is run, operations bound to the variables are ``reset`` and
+    run to update the variables.
     """
-    class UserSubgraph(Subgraph, variables=variables):
-        pass
-
-    return UserSubgraph()

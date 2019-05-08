@@ -1,3 +1,19 @@
+=================
+gmxapi data model
+=================
+
+Basic data types, containers
+============================
+
+Handles and Futures
+===================
+
+Proxies and managed resources
+=============================
+
+Operations, factories, and data flow: declaration, definition, and initialization
+=================================================================================
+
 Data proxies (Results, OutputCollections, PublishingDataProxies)
 are created in a specific Context and maintain a reference
 to the Context in which they are created.
@@ -15,6 +31,51 @@ Examples could be
 
   * after completing the definition of a subgraph
   * a write-once resource or iterator has already been used
+
+Data
+----
+
+For compatibility and versatility, gmxapi data typing does not require specific
+classes. In C++, typing uses C++ templating. In Python, abstract base classes
+and duck typing are used. A C API provides a data description struct that is
+easily convertible to the metadata structs for Python ctypes, numpy, Eigen, HDF5, etc.
+
+Fundamental data types
+~~~~~~~~~~~~~~~~~~~~~~
+
+* Integer
+* Float
+* Boolean
+
+Containers
+~~~~~~~~~~
+
+* NDArray
+* String
+* AssociativeArray
+
+Constraints and placeholders
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Specify some parameters within a type.
+
+Proxies
+-------
+
+* File()
+* Future()
+* Handle()
+
+"""
+# Notes...
+# Handle and Future are two implementations of the gmxapi Data interface.
+# Data objects have type and shape. The handle to the Data object points to a
+# specific dimension in that shape.
+# Handle is implicitly convertible to Python data in addition to supporting the buffer
+# protocol. Future has a `result()` method that returns a Handle, and supports a
+# protocol to move managed resources between Contexts.
+
+
 
 
 Expressing inputs and outputs
@@ -43,6 +104,17 @@ Consider `memoryview` as a model for proxies and Results: has a `release()`
 method that is called automatically when handle is obtained in a context manager,
 after which accesses produce
 `ValueError: operation forbidden on released memoryview object`
+
+NDArray specialization
+======================
+
+Will this work?!
+
+Python: NDArray[shape=(N,3), dtype=float]
+
+C++: NDArray<float, shape<shape::any, 3>>
+
+subclasses of NDArray used to constrain input and output definitions
 
 Arrays
 ======

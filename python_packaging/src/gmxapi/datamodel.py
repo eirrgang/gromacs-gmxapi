@@ -326,6 +326,12 @@ class EnsembleDataSource(object):
     def node(self, member: int):
         return self.source[member]
 
+    def reset(self):
+        protocols = ('reset', '_reset')
+        for protocol in protocols:
+            if hasattr(self.source, protocol):
+                getattr(self.source, protocol)()
+
 
 class DataSourceCollection(collections.OrderedDict):
     """Store and describe input data handles for an operation.
@@ -362,6 +368,11 @@ class DataSourceCollection(collections.OrderedDict):
                     raise exceptions.ApiError('Cannot process data source {}'.format(value))
             named_data.append((name, value))
         super().__init__(named_data)
+
+    def reset(self):
+        """Reset all sources in the collection."""
+        for source in self.values():
+            source.reset()
 
 
 def ndarray(data=None):
