@@ -116,7 +116,6 @@ from ._logging import logger
 from . import _gmxapi
 from . import datamodel
 # from .context import ContextCharacteristics as ContextCharacteristics
-# from .context import get_context
 from . import datamodel
 from . import exceptions
 from .operation import computed_result, function_wrapper, make_operation

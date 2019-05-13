@@ -40,10 +40,12 @@ control initialization of the gmxapi.context module before the first time it is
 used by other gmxapi submodules.
 """
 
-__all__ = ['get_context']
+__all__ = ['AbstractOperationHandle', 'NodeBuilder']
 
+import abc
 # Note: New in version 3.6: Flag, IntFlag, auto
 import enum
+import typing
 import weakref
 
 from gmxapi import exceptions
@@ -57,67 +59,63 @@ from gmxapi import exceptions
 #     MPI_ENSEMBLE = auto()
 #     ENSEMBLE = SERIAL_ENSEMBLE | MPI_ENSEMBLE
 
-
-class __Context(object):
-    """
-    When a Context instance receives a request for a new handle, the instance
-    can return a handle to itself or to a new instance (if the current instance
-    cannot meet the requirements expressed in the request for a handle). The
-    current instance may retain a reference or proxy to the child instance to
-    facilitate resource reuse. A child Context may retain a weak reference to
-    the parent Context to surrender or request resources or data.
-    """
-
-    def __init__(self):
-        self.characteristics = ContextCharacteristics.MODULE_DEFAULT
-        self.width = 1
-        self.parent = None
-
-    def clear(self):
-        """Reinitialize current context."""
-        self.__init__()
-
-    def clone(self):
-        new_context = __class__
-        new_context.parent = weakref.proxy(self)
-        return new_context
-
-    def handle(self, flags: ContextCharacteristics = None):
-        if flags is None:
-            return self
-        if flags & self.characteristics:
-            return self
-        if flags & ContextCharacteristics.IMMEDIATE_EXECUTION:
-            self.characteristics |= ContextCharacteristics.IMMEDIATE_EXECUTION
-            return self.handle(flags)
-        if flags & ContextCharacteristics.ENSEMBLE:
-            if not self.characteristics & ContextCharacteristics.ENSEMBLE:
-                raise exceptions.UsageError('should have used ensemble_handle()')
-            else:
-                return self
-
-    def ensemble_handle(self, options=None):
-        handle = self
-        if options is None:
-            if not bool(self.characteristics & ContextCharacteristics.ENSEMBLE):
-                raise exceptions.UsageError(
-                    'Must provide ensemble options when requesting handle from non-ensemble context.')
-        else:
-            try:
-                width = options['width']
-            except:
-                raise exceptions.UsageError('Must specify ensemble width when requesting ensemble handle.')
-            if width != self.width:
-                child = self.clone()
-                child.width = width
-                child.characteristics |= ContextCharacteristics.ENSEMBLE
-                handle = child
-        assert bool(handle.characteristics & ContextCharacteristics.ENSEMBLE)
-        return handle
-
-
-# Context stack.
-__current_context = [__Context()]
+#
+# class __Context(object):
+#     """
+#     When a Context instance receives a request for a new handle, the instance
+#     can return a handle to itself or to a new instance (if the current instance
+#     cannot meet the requirements expressed in the request for a handle). The
+#     current instance may retain a reference or proxy to the child instance to
+#     facilitate resource reuse. A child Context may retain a weak reference to
+#     the parent Context to surrender or request resources or data.
+#     """
+#
+#     def __init__(self):
+#         self.characteristics = ContextCharacteristics.MODULE_DEFAULT
+#         self.width = 1
+#         self.parent = None
+#
+#     def clear(self):
+#         """Reinitialize current context."""
+#         self.__init__()
+#
+#     def clone(self):
+#         new_context = __class__
+#         new_context.parent = weakref.proxy(self)
+#         return new_context
+#
+#     def handle(self, flags: ContextCharacteristics = None):
+#         if flags is None:
+#             return self
+#         if flags & self.characteristics:
+#             return self
+#         if flags & ContextCharacteristics.IMMEDIATE_EXECUTION:
+#             self.characteristics |= ContextCharacteristics.IMMEDIATE_EXECUTION
+#             return self.handle(flags)
+#         if flags & ContextCharacteristics.ENSEMBLE:
+#             if not self.characteristics & ContextCharacteristics.ENSEMBLE:
+#                 raise exceptions.UsageError('should have used ensemble_handle()')
+#             else:
+#                 return self
+#
+#     def ensemble_handle(self, options=None):
+#         handle = self
+#         if options is None:
+#             if not bool(self.characteristics & ContextCharacteristics.ENSEMBLE):
+#                 raise exceptions.UsageError(
+#                     'Must provide ensemble options when requesting handle from non-ensemble context.')
+#         else:
+#             try:
+#                 width = options['width']
+#             except:
+#                 raise exceptions.UsageError('Must specify ensemble width when requesting ensemble handle.')
+#             if width != self.width:
+#                 child = self.clone()
+#                 child.width = width
+#                 child.characteristics |= ContextCharacteristics.ENSEMBLE
+#                 handle = child
+#         assert bool(handle.characteristics & ContextCharacteristics.ENSEMBLE)
+#         return handle
 
 
 def get_context(requirements=None):
@@ -131,3 +129,5 @@ def get_context(requirements=None):
             if width != __current_context[-1].width:
                 handle = handle.ensemble_handle(options={'width': width})
     return handle
+
+

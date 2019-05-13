@@ -369,6 +369,22 @@ class DataSourceCollection(collections.OrderedDict):
             named_data.append((name, value))
         super().__init__(named_data)
 
+    def __setitem__(self, key, value) -> None:
+        if not isinstance(key, str):
+            raise exceptions.TypeError('Data must be named with str type.')
+        if not isinstance(value, (str, bool, int, float, dict, NDArray, EnsembleDataSource)):
+            if isinstance(value, collections.abc.Iterable):
+                # Note: Here we assume that iterables are arrays first and ensemble data if necessary.
+                # Warning: the iterable may contain Future objects.
+                # TODO: revisit as we sort out data shape and Future protocol.
+                value = ndarray(value)
+            elif hasattr(value, 'result'):
+                # A Future object.
+                pass
+            else:
+                raise exceptions.ApiError('Cannot process data source {}'.format(value))
+        super().__setitem__(key, value)
+
     def reset(self):
         """Reset all sources in the collection."""
         for source in self.values():
