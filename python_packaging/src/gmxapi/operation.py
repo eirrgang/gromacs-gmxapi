@@ -640,6 +640,7 @@ class ProxyResourceManager(SourceResource):
 
 class AbstractOperationHandle(abc.ABC):
     """Handle to an operation instance (graph node)."""
+
     @abc.abstractmethod
     def run(self):
         """Assert execution of an operation.
@@ -1341,12 +1342,14 @@ class PyFunctionRunner(abc.ABC):
 
 class CapturedOutputRunner(PyFunctionRunner):
     """Function runner that captures return value as output.data"""
+
     def __call__(self, resources: PyFunctionRunnerResources):
         resources['output'].data = self.function(**resources.input())
 
 
 class OutputParameterRunner(PyFunctionRunner):
     """Function runner that uses output parameter to let function publish output."""
+
     def __call__(self, resources: PyFunctionRunnerResources):
         self.function(**resources)
 
@@ -1473,6 +1476,7 @@ class OperationHandle(AbstractOperationHandle):
 
 class OperationPlaceholder(AbstractOperationHandle):
     """Placeholder for Operation handle during subgraph definition."""
+
     def __init__(self, subgraph_resource_manager):
         ...
 
@@ -1488,6 +1492,7 @@ class OperationPlaceholder(AbstractOperationHandle):
 
 class NodeBuilder(abc.ABC):
     """Add an operation node to be managed by a Context."""
+
     @abc.abstractmethod
     def build(self) -> AbstractOperationHandle:
         ...
@@ -1521,6 +1526,7 @@ class Context(abc.ABC):
     Context implementations are not required to inherit from gmxapi.context.Context,
     but this class definition serves to specify the current Context API.
     """
+
     @abc.abstractmethod
     def node_builder(self, label=None) -> NodeBuilder:
         ...
@@ -2089,6 +2095,7 @@ class SubgraphContext(Context):
     Allows operations to be configured without adding nodes to the global execution
     context.
     """
+
     def __init__(self):
         self.labels = {}
         self.resetters = set()
@@ -2157,6 +2164,7 @@ class Subgraph(object, metaclass=GraphMeta):
         #  references for update/annotation when exiting the 'with' block.
     """
 
+
 class SubgraphBuilder(object):
     """Helper for defining new Subgraphs.
 
@@ -2171,6 +2179,7 @@ class SubgraphBuilder(object):
 
     Instances of SubgraphBuilder are returned by the ``subgraph()`` utility function.
     """
+
     def __init__(self, variables):
         self.__dict__.update({'variables': variables,
                               '_staging': {},
