@@ -388,7 +388,10 @@ class DataSourceCollection(collections.OrderedDict):
     def reset(self):
         """Reset all sources in the collection."""
         for source in self.values():
-            source.reset()
+            if hasattr(source, 'reset'):
+                source.reset()
+            if hasattr(source, '_reset'):
+                source._reset()
 
 
 def ndarray(data=None):

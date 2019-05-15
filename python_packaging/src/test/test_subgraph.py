@@ -41,12 +41,19 @@ from gmxapi.operation import Subgraph
 def add_float(a: float, b: float) -> float:
     return a + b
 
-#
+
+@gmx.function_wrapper(output={'data': bool})
+def less_than(a: float, b: float) -> bool:
+    return a < b
+
+
 # def test_subgraph_class():
-#     class MySubgraph(Subgraph, variables={'int_with_default': 1, 'boolData': bool}):
+#     """Test subgraph definition as class body execution accompanied by metaclass processing.
+#     """
+#     class MySubgraph(Subgraph, variables={'int_with_default': 1, 'bool_data': bool}):
 #         """Testable subgraph."""
-#         # Subgraph.get_variable('int_with_default')
-#         # data = gmx.make_constant(int_with_default)
+#         int_with_default = Subgraph.Variable(int, 1)
+#         bool_data = Subgraph.Variable(bool)
 #
 #     subgraph = MySubgraph()
 #     assert hasattr(MySubgraph, 'int_with_default')
@@ -54,14 +61,24 @@ def add_float(a: float, b: float) -> float:
 #     assert subgraph.int_with_default == 1
 
 
-@pytest.mark.skip(reason='not implemented')
 def test_subgraph_function():
-    subgraph = gmx.subgraph(variables={'float_with_default': 1.0})
+    subgraph = gmx.subgraph(variables={'float_with_default': 1.0, 'bool_data': True})
     with subgraph:
-        data = gmx.make_constant(subgraph.float_with_default)
-        subgraph.float_with_default = add_float(data, 1)
+        data = add_float(subgraph.float_with_default, 1.).output.data
+        # Define the update for float_with_default to come from an add_float operation.
+        subgraph.float_with_default = data
+        # Error: race condition? subgraph.float_with_default points to previous value?
+        subgraph.bool_data = less_than(data, 6.).output.data
+    operation_instance = subgraph()
+    operation_instance.run()
+    assert operation_instance.values['float_with_default'] == 2.
+
+    loop = gmx.while_loop(operation=subgraph, condition=subgraph.bool_data)
+    handle = loop()
+    assert handle.output.float_with_default.result() == 6
 
 
-@pytest.mark.skip(reason='not implemented')
 def test_assumptions():
-    assert add_float(1., 1.).output.data.result() == 2
+    const = gmx.make_constant(1.)
+    assert add_float(const, const).output.data.result() == 2
+    # Test that subgraph variable accumulates results from iterations.

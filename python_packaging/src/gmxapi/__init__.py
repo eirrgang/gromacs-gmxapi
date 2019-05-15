@@ -137,6 +137,14 @@ def mdrun(input=None):
     Otherwise, this operation does not yet support the gmxapi data flow model.
 
     `input` may be a TPR file name.
+
+    Note:
+        New function names will be appearing to handle tasks that are separate
+
+        "simulate" is plausibly a dispatcher or base class for various tasks
+        dispatched by mdrun. Specific work factories are likely "minimize,"
+        "test_particle_insertion," "legacy_simulation" (do_md), or "simulation"
+        composition (which may be leap-frog, vv, and other algorithms)
     """
     try:
         filename = os.path.abspath(input)

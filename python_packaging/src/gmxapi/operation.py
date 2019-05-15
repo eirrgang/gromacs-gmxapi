@@ -399,7 +399,7 @@ class DataProxyBase(object, metaclass=DataProxyMeta):
 
         This almost certainly doesn't do quite what we want...
         """
-        for name, value in cls.__dict__:
+        for name, value in cls.__dict__.items():
             if isinstance(value, ProxyDataDescriptor):
                 yield name, value
 
@@ -464,14 +464,20 @@ def define_publishing_data_proxy(output_description) -> typing.Type[DataProxyBas
 class SourceResource(abc.ABC):
     """Resource Manager for a data provider."""
 
-    @classmethod
-    def __subclasshook__(cls, C):
-        """Check if a class looks like a ResourceManager for a data source."""
-        if cls is SourceResource:
-            if any('update_output' in B.__dict__ for B in C.__mro__) \
-                    and hasattr(C, '_data'):
-                return True
-        return NotImplemented
+    # @classmethod
+    # def __subclasshook__(cls, C):
+    #     """Check if a class looks like a ResourceManager for a data source."""
+    #     if cls is SourceResource:
+    #         if any('update_output' in B.__dict__ for B in C.__mro__) \
+    #                 and hasattr(C, '_data'):
+    #             return True
+    #     return NotImplemented
+
+    # This might not belong here. Maybe separate out for a OperationHandleManager?
+    @abc.abstractmethod
+    def data(self) -> DataProxyBase:
+        """Get the output data proxy."""
+        ...
 
     @abc.abstractmethod
     def is_done(self, name: str) -> bool:
@@ -479,7 +485,7 @@ class SourceResource(abc.ABC):
 
     @abc.abstractmethod
     def get(self, name: str) -> 'OutputData':
-        return None
+        ...
 
     @abc.abstractmethod
     def update_output(self):
@@ -555,11 +561,18 @@ class StaticSourceManager(SourceResource):
         for member in range(width):
             self._data.set(data[member], member=member)
 
+        output_collection_description = OutputCollectionDescription(**{name: dtype})
+        self.output_data_proxy = define_output_data_proxy(output_description=output_collection_description)
+
     def is_done(self, name: str) -> bool:
         return True
 
     def get(self, name: str) -> 'OutputData':
+        assert self._data.name == name
         return self._data
+
+    def data(self) -> DataProxyBase:
+        return self.output_data_proxy(self)
 
     def update_output(self):
         pass
@@ -621,6 +634,35 @@ class ProxyResourceManager(SourceResource):
         self._result = self._proxied_future.result()
         self._done = True
 
+    def data(self) -> DataProxyBase:
+        raise exceptions.ApiError('ProxyResourceManager cannot yet manage a full OutputDataProxy.')
+
+
+class AbstractOperationHandle(abc.ABC):
+    """Handle to an operation instance (graph node)."""
+    @abc.abstractmethod
+    def run(self):
+        """Assert execution of an operation.
+
+        After calling run(), the operation results are guaranteed to be available
+        in the local context.
+        """
+
+    @property
+    @abc.abstractmethod
+    def output(self) -> DataProxyBase:
+        """Get a proxy collection to the output of the operation."""
+        ...
+
+    # TODO: Factory for translating an operation from one context to another.
+    # E.g.
+    #
+    #     @classmethod
+    #     @abc.abstractmethod
+    #     def factory(cls, context=None, input: typing.Mapping = None) -> 'AbstractOperationHandle':
+    #         """Dispatch an Operation factory for the given Context and input."""
+    #         ...
+
 
 # TODO: Implement observer pattern for edge->node data flow.
 # Step 0: implement subject interface subscribe()
@@ -634,11 +676,14 @@ class ProxyResourceManager(SourceResource):
 
 
 class Future(object):
-    """
+    """gmxapi data handle.
 
     Future is currently more than a Future right now. (should be corrected / clarified.)
     Future is also a facade to other features of the data provider. The ``subscribe``
     method allows consumers to bind as Observers.
+
+    TODO: extract the abstract class for input inspection?
+    Currently abstraction is handled through SourceResource subclassing.
     """
 
     def __init__(self, resource_manager: SourceResource, name: str, description: gmx.datamodel.ResultDescription):
@@ -655,7 +700,6 @@ class Future(object):
         the operation that produces this Result.
         """
         self.resource_manager.update_output()
-        # TODO: refactor to something like resource_manager.is_done(self.name)
         assert self.resource_manager.is_done(self.name)
         # Return ownership of concrete data
         handle = self.resource_manager.get(self.name)
@@ -671,7 +715,6 @@ class Future(object):
         of inputs to outputs, but allows a quick prototype for looping operations.
         """
         self.resource_manager.reset()
-        assert not self.resource_manager.is_done(self.name)
 
     @property
     def dtype(self):
@@ -780,6 +823,10 @@ class OutputData(object):
         else:
             self._data[member] = self._description.dtype(value)
         self._done[member] = True
+
+    def reset(self):
+        self._done = [False] * self._description.width
+        self._data = [None] * self._description.width
 
 
 class SinkTerminal(object):
@@ -1355,7 +1402,7 @@ def wrapped_function_runner(function, output_description: OutputCollectionDescri
         return CapturedOutputRunner(function, OutputCollectionDescription(data=return_type))
 
 
-class OperationHandle(object):
+class OperationHandle(AbstractOperationHandle):
     """Dynamically defined Operation handle.
 
     Define a gmxapi Operation for the functionality being wrapped by the enclosing code.
@@ -1367,7 +1414,7 @@ class OperationHandle(object):
     data flow for output Futures, which may depend on the execution context.
     """
 
-    def __init__(self, resource_manager: ResourceManager):
+    def __init__(self, resource_manager: SourceResource):
         """Initialization defines the unique input requirements of a work graph node.
 
         Initialization parameters map to the parameters of the wrapped function with
@@ -1424,23 +1471,19 @@ class OperationHandle(object):
         self.__resource_manager.update_output()
 
 
-class AbstractOperationHandle(abc.ABC):
-    """Handle to an operation instance (graph node)."""
+class OperationPlaceholder(AbstractOperationHandle):
+    """Placeholder for Operation handle during subgraph definition."""
+    def __init__(self, subgraph_resource_manager):
+        ...
 
-    @classmethod
-    @abc.abstractmethod
-    def factory(cls, context=None, input: typing.Mapping = None) -> 'AbstractOperationHandle':
-        """Dispatch an Operation factory for the given Context and input."""
-        return
-
-    @abc.abstractmethod
     def run(self):
-        pass
+        raise exceptions.UsageError('This placeholder operation handle is not in an executable context.')
 
     @property
-    @abc.abstractmethod
-    def output(self):
-        """Get the data proxy for this operation's output."""
+    def output(self) -> DataProxyBase:
+        """Allow subgraph components to be connected without instantiating actual operations."""
+        if not isinstance(current_context(), SubgraphContext):
+            raise exceptions.UsageError('Invalid access to subgraph internals.')
 
 
 class NodeBuilder(abc.ABC):
@@ -1448,6 +1491,25 @@ class NodeBuilder(abc.ABC):
     @abc.abstractmethod
     def build(self) -> AbstractOperationHandle:
         ...
+
+    @abc.abstractmethod
+    def add_input(self, name: str, source):
+        ...
+
+    @abc.abstractmethod
+    def add_resource_factory(self, factory):
+        # The factory function takes input in the form the Context will provide it
+        # and produces a resource object that will be passed to the callable that
+        # implements the operation.
+        assert callable(factory)
+        ...
+
+    @abc.abstractmethod
+    def add_operation_details(self, operation):
+        # TODO: This can be decomposed into the appropriate set of factory functions
+        #  as they become clear.
+        assert hasattr(operation, '_input_signature_description')
+        assert hasattr(operation, 'make_uid')
 
 
 class Context(abc.ABC):
@@ -1459,32 +1521,57 @@ class Context(abc.ABC):
     Context implementations are not required to inherit from gmxapi.context.Context,
     but this class definition serves to specify the current Context API.
     """
+    @abc.abstractmethod
+    def node_builder(self, label=None) -> NodeBuilder:
+        ...
 
 
+# TODO: Add required components to NodeBuilder ABC:
+#  * input_signature_description
+#  * ability to make_uid
+#  * operation_director
+#  * whatever ResourceManager _actually_ needs (instead of operation_details instance)
 class ModuleNodeBuilder(NodeBuilder):
     """Builder for work nodes in gmxapi.operation.ModuleContext."""
 
-    def __init__(self, context, operation, label=None):
-        self.operation = operation
+    def __init__(self, context: 'ModuleContext', label=None):
         self.context = context
         self.label = label
-        self.input_sink = SinkTerminal(operation._input_signature_description)
+        self.operation_details = None
         self.sources = DataSourceCollection()
 
+    def add_operation_details(self, operation):
+        # TODO: This can be decomposed into the appropriate set of factory functions as they become clear.
+        assert hasattr(operation, '_input_signature_description')
+        assert hasattr(operation, 'make_uid')
+        self.operation_details = operation
+
     def add_input(self, name, source):
+        # TODO: We can move some input checking here as the data model matures.
         self.sources[name] = source
 
     def add_resource_factory(self, factory):
         self.resource_factory = factory
 
     def build(self) -> AbstractOperationHandle:
-        self.input_sink.update(self.sources)
-        edge = DataEdge(self.sources, self.input_sink)
+        # Check for the ability to instantiate operations.
+        if self.operation_details is None:
+            raise exceptions.UsageError('Missing details needed for operation node.')
+
+        input_sink = SinkTerminal(self.operation_details._input_signature_description)
+        input_sink.update(self.sources)
+        edge = DataEdge(self.sources, input_sink)
         # TODO: Fingerprinting: Each operation instance has unique output based on the unique input.
         #            input_data_fingerprint = edge.fingerprint()
 
         # Set up output proxy.
-        handle = self.context.setup_output_proxy(source=edge, operation=self.operation)
+        uid = self.operation_details.make_uid(edge)
+        # TODO: ResourceManager should fetch the relevant factories from the Context
+        #  instead of getting an OperationDetails instance.
+        manager = ResourceManager(source=edge, operation=self.operation_details())
+        self.context.work_graph[uid] = manager
+        handle = OperationHandle(self.context.work_graph[uid])
+        handle.node_uid = uid
         return handle
 
 
@@ -1499,7 +1586,7 @@ class ModuleContext(Context):
         self.operations = {}
         self.labels = {}
 
-    def node_builder(self, operation, label=None) -> NodeBuilder:
+    def node_builder(self, label=None) -> NodeBuilder:
         """Get a builder for a new work node to add an operation in this context."""
         if label is not None:
             if label in self.labels:
@@ -1508,19 +1595,7 @@ class ModuleContext(Context):
                 # The builder should update the labeled node when it is done.
                 self.labels[label] = None
 
-        return ModuleNodeBuilder(context=weakref.proxy(self), operation=operation, label=label)
-
-    def setup_output_proxy(self, source, operation):
-        """Finalize output specification for a node.
-
-        Called by NodeBuilder to finalize the resources for an Operation handle.
-        """
-        uid = operation.make_uid(source)
-        manager = ResourceManager(source=source, operation=operation())
-        self.work_graph[uid] = manager
-        handle = OperationHandle(self.work_graph[uid])
-        handle.node_uid = uid
-        return handle
+        return ModuleNodeBuilder(context=weakref.proxy(self), label=label)
 
 
 # Context stack.
@@ -1537,6 +1612,46 @@ def current_context() -> Context:
     command retrieves a reference to the currently active Context.
     """
     return __current_context[-1]
+
+
+def push_context(context) -> Context:
+    """Enter a sub-context by pushing a context to the global context stack.
+    """
+    __current_context.append(context)
+    return current_context()
+
+
+def pop_context() -> Context:
+    """Exit the current Context by popping it from the stack."""
+    return __current_context.pop()
+
+
+class OperationDirector(object):
+    """Direct the construction of an operation node.
+
+    Collaboration: used by OperationDetails.operation_director, which
+    will likely dispatch to different implementations depending on
+    requirements of work or context.
+    """
+
+    def __init__(self, *args, operation_details, context: Context, label=None, **kwargs):
+        self.operation_details = operation_details
+        self.context = weakref.proxy(context)
+        self.args = args
+        self.kwargs = kwargs
+        self.label = label
+
+    def __call__(self):
+        cls = self.operation_details
+        builder = self.context.node_builder(label=self.label)
+        builder.add_operation_details(cls)
+
+        data_source_collection = cls._input_signature_description.bind(*self.args, **self.kwargs)
+        for name, source in data_source_collection.items():
+            builder.add_input(name, source)
+        builder.add_resource_factory(cls.resource_director)
+        handle = builder.build()
+        return handle
 
 
 # TODO: For outputs, distinguish between "results" and "events".
@@ -1648,7 +1763,7 @@ def function_wrapper(output: dict = None):
                 return resources
 
             @classmethod
-            def construct(cls, context, *args, **kwargs):
+            def operation_director(cls, *args, context: Context, label=None, **kwargs):
                 """Dispatching Director for adding a work node.
 
                 A Director for input of a particular sort knows how to reconcile
@@ -1656,14 +1771,17 @@ def function_wrapper(output: dict = None):
                 The Director (using a less flexible / more standard interface)
                 builds the operation node using a node builder provided by the Context.
                 """
-                builder = context.node_builder(operation=cls, label=None)
-
-                data_source_collection = cls._input_signature_description.bind(*args, **kwargs)
-                for name, source in data_source_collection.items():
-                    builder.add_input(name, source)
-                builder.add_resource_factory(cls.resource_director)
-                handle = builder.build()
-                return handle
+                if not isinstance(context, Context):
+                    raise exceptions.UsageError('Context instance needed for dispatch.')
+                # TODO: use Context characteristics rather than isinstance checks.
+                if isinstance(context, ModuleContext):
+                    construct = OperationDirector(*args, operation_details=cls, context=context, label=label, **kwargs)
+                    return construct()
+                elif isinstance(context, SubgraphContext):
+                    construct = OperationDirector(*args, operation_details=cls, context=context, label=label, **kwargs)
+                    return construct()
+                else:
+                    raise exceptions.ApiError('Cannot dispatch operation_director for context {}'.format(context))
 
         # TODO: (FR4) Update annotations with gmxapi data types. E.g. return -> Future.
         @functools.wraps(function)
@@ -1674,16 +1792,6 @@ def function_wrapper(output: dict = None):
             # yet instantiated.
             # Inspection of the offered input occurs when this factory is called,
             # and OperationDetails, ResourceManager, and Operation are instantiated.
-            #
-            # Per gmxapi.datamodel.DataEdge,
-            # 1. Describe the data source(s)
-            # 2. Compare to input description to determine sink shape.
-            # 3. Build Edge with any implied data transformations.
-            # 4. Make node input fingerprint and data source(s) available to resource manager.
-            # 5. (TODO) Tag outputs with input fingerprint to allow unique identification of results.
-            #
-            # Return a handle to an operation bound to an appropriate resource manager
-            # for the implementation details (wrapped function and provided input.
 
             # This operation factory is specialized for the default package Context.
             if context is None:
@@ -1692,9 +1800,9 @@ def function_wrapper(output: dict = None):
                 raise exceptions.ApiError('Non-default context handling not implemented.')
 
             # This calls a dispatching function that may not be able to reconcile the input
-            # and Context capabilities. This is the point to handle various exceptions for
+            # and Context capabilities. This is the place to handle various exceptions for
             # whatever reasons this reconciliation cannot occur.
-            handle = OperationDetails.construct(context, *args, **kwargs)
+            handle = OperationDetails.operation_director(*args, context=context, label=None, **kwargs)
 
             # TODO: NOW: The input fingerprint describes the provided input
             # as (a) ensemble input, (b) static, (c) future. By the time the
@@ -1910,6 +2018,97 @@ class GraphMeta(type):
         super().__init__(name, bases, namespace)
 
 
+class SubgraphNodeBuilder(NodeBuilder):
+    def __init__(self, context: 'SubgraphContext', label=None):
+        self.context = context
+        self.label = label
+        self.operation_details = None
+        # self.input_sink = SinkTerminal(operation._input_signature_description)
+        self.sources = DataSourceCollection()
+
+    def add_resource_factory(self, factory):
+        self.factory = factory
+
+    def add_operation_details(self, operation):
+        self.operation_details = operation
+
+    def add_input(self, name: str, source):
+        # Inspect inputs.
+        #  * Are they from outside the subgraph?
+        #  * Subgraph variables?
+        #  * Subgraph internal nodes?
+        # Inputs from outside the subgraph are (provisionally) subgraph inputs.
+        # Inputs that are subgraph variables or subgraph internal nodes mark operations that will need to be re-run.
+        # For first implementation, let all operations be recreated, but we need to
+        # manage the right input proxies.
+        # For zeroeth implementation, try just tracking the entities that need a reset() method called.
+        if hasattr(source, 'reset'):
+            self.context.add_resetter(source.reset)
+        elif hasattr(source, '_reset'):
+            self.context.add_resetter(source._reset)
+        self.sources[name] = source
+
+    def build(self) -> OperationPlaceholder:
+        """Get a reference to the internal node in the subgraph definition.
+
+        In the SubgraphContext, these handles cannot represent uniquely identifiable
+        results. They are placeholders for relative positions in graphs that are
+        not defined until the the subgraph is being executed.
+
+        Such references should be tracked and invalidated when exiting the
+        subgraph context. Within the subgraph context, they are used to establish
+        the recipe for updating the subgraph's outputs or persistent data during
+        execution.
+        """
+        # Placeholder handles in the subgraph definition don't have real resource managers.
+        # Check for the ability to instantiate operations.
+        if self.operation_details is None:
+            raise exceptions.UsageError('Missing details needed for operation node.')
+
+        input_sink = SinkTerminal(self.operation_details._input_signature_description)
+        input_sink.update(self.sources)
+        edge = DataEdge(self.sources, input_sink)
+        # TODO: Fingerprinting: Each operation instance has unique output based on the unique input.
+        #            input_data_fingerprint = edge.fingerprint()
+
+        # Set up output proxy.
+        uid = self.operation_details.make_uid(edge)
+        # TODO: ResourceManager should fetch the relevant factories from the Context
+        #  instead of getting an OperationDetails instance.
+        manager = ResourceManager(source=edge, operation=self.operation_details())
+        self.context.work_graph[uid] = manager
+        handle = OperationHandle(self.context.work_graph[uid])
+        handle.node_uid = uid
+        # handle = OperationPlaceholder()
+        return handle
+
+
+class SubgraphContext(Context):
+    """Provide a Python context manager in which to set up a graph of operations.
+
+    Allows operations to be configured without adding nodes to the global execution
+    context.
+    """
+    def __init__(self):
+        self.labels = {}
+        self.resetters = set()
+        self.work_graph = {}
+
+    def node_builder(self, label=None) -> NodeBuilder:
+        if label is not None:
+            if label in self.labels:
+                raise exceptions.ValueError('Label {} is already in use.'.format(label))
+            else:
+                # The builder should update the labeled node when it is done.
+                self.labels[label] = None
+
+        return SubgraphNodeBuilder(context=weakref.proxy(self), label=label)
+
+    def add_resetter(self, function):
+        assert callable(function)
+        self.resetters.add(function)
+
+
 class Subgraph(object, metaclass=GraphMeta):
     """
 
@@ -1958,15 +2157,153 @@ class Subgraph(object, metaclass=GraphMeta):
         #  references for update/annotation when exiting the 'with' block.
     """
 
-    # TODO: Use GraphMeta.__prepare__ to create an object that captures every assignment
-    #  in the class body to be replayed on each iteration of the while loop.
+class SubgraphBuilder(object):
+    """Helper for defining new Subgraphs.
+
+    Manages a Python context in which to define a new Subgraph type. Can be used
+    in a Python ``with`` construct exactly once to provide the Subgraph class body.
+    When the ``with`` block is exited (or ``build()`` is called explicitly), a
+    new type instance becomes available. Subsequent calls to SubgraphBuilder.__call__(self, ...)
+    are dispatched to the Subgraph constructor.
+
+    Outside of the ``with`` block, read access to data members is proxied to
+    descriptors on the built Subgraph.
+
+    Instances of SubgraphBuilder are returned by the ``subgraph()`` utility function.
+    """
+    def __init__(self, variables):
+        self.__dict__.update({'variables': variables,
+                              '_staging': {},
+                              '_editing': False,
+                              '_subgraph_context': None,
+                              '_subgraph_instance': None,
+                              '_fused_operation': None,
+                              '_factory': None})
+
+        # class MySubgraph(Subgraph, variables=variables):
+        #     pass
+        #
+        # self._subgraph_instance = MySubgraph()
+
+    def __getattr__(self, item):
+        if self._editing:
+            if item in self.variables:
+                logger.debug('Read access to subgraph variable {}'.format(item))
+                # Return a placeholder that we can update during iteration.
+                # Long term, this is probably implemented with data descriptors
+                # that will be moved to a new Subgraph type object.
+                if not isinstance(self.variables[item], Future):
+                    future = gmx.make_constant(self.variables[item])
+                    self.variables[item] = future
+                return self.variables[item]
+            else:
+                raise AttributeError('Invalid attribute: {}'.format(item))
+        else:
+            return lambda obj: obj.values[item]
+
+    def __setattr__(self, key, value):
+        """Part of the builder interface."""
+        if key in self.__dict__:
+            self.__dict__[key] = value
+        else:
+            if self._editing:
+                self.add_update(key, value)
+            else:
+                raise exceptions.UsageError('Subgraph is not in an editable state.')
+
+    def add_update(self, key, value):
+        """Add a variable update to the internal subgraph."""
+        if key not in self.variables:
+            raise AttributeError('No such attribute: {}'.format(key))
+        if not self._editing:
+            raise exceptions.UsageError('Subgraph is not in an editable state.')
+        # Else, stage the potential final value for the iteration.
+        self._staging[key] = value
 
     def __enter__(self):
-        self._editing = True
+        """Enter a Context managed by the subgraph to capture operation additions.
+
+        Allows the internal data flow of the subgraph to be defined in the same
+        manner as the default work graph while the Python context manager is active.
+
+        The subgraph Context is activated when entering a ``with`` block and
+        finalized at the end of the block.
+        """
+        # While editing the subgraph in the SubgraphContext, we need __get__ and __set__
+        # data descriptor access on the Subgraph subclass type, but outside of the
+        # context manager, the descriptor should be non-writable and more opaque,
+        # while the instance should be readable, but not writable.
+        self.__dict__['_editing'] = True
+        # TODO: this probably needs to be configured with variables...
+        self.__dict__['_subgraph_context'] = SubgraphContext()
+        push_context(self._subgraph_context)
         return self
 
+    def build(self):
+        """Build the subgraph by defining some new operations.
+
+        Examine the subgraph variables. Variables with handles to data sources
+        in the SubgraphContext represent work that needs to be executed on
+        a subgraph execution or iteration. Variables with handles to data sources
+        outside of the subgraph represent work that needs to be executed once
+        on only the first iteration to initialize the subgraph.
+
+        Construct a factory for the fused operation that performs the work to
+        update the variables on a single iteration.
+
+        Construct a factory for the fused operation that performs the work to
+        update the variables on subsequent iterations and which will be fed
+        the outputs of a previous iteration. Both of the generated operations
+        have the same output signature.
+
+        Construct and wrap the generator function to recursively append work
+        to the graph and update until condition is satisfied.
+
+        TODO: Explore how to drop work from the graph once there are no more
+         references to its output, including check-point machinery.
+        """
+        inputs = {}
+        for key, value in self.variables.items():
+            if isinstance(value, Future):
+                inputs[key] = value
+            else:
+                # TODO: What if we don't want to provide default values?
+                inputs[key] = gmx.make_constant(value)
+
+        updates = self._staging
+
+        class Subgraph(object):
+            def __init__(self, input_futures, update_sources):
+                self.values = {key: value.result() for key, value in input_futures.items()}
+                self.futures = {key: value for key, value in input_futures.items()}
+                self.update_sources = {key: value for key, value in update_sources.items()}
+
+            def run(self):
+                for name in self.values:
+                    if name in self.update_sources:
+                        self.values[name] = self.update_sources[name].result()
+                # Replace the data sources in the futures.
+                for name in self.futures:
+                    self.futures[name].resource_manager = gmx.make_constant(self.values[name]).resource_manager
+                for name in self.update_sources:
+                    self.update_sources[name]._reset()
+
+        subgraph = Subgraph(inputs, updates)
+
+        return lambda subgraph=subgraph: subgraph
+
     def __exit__(self, exc_type, exc_val, exc_tb):
-        self._editing = False
+        """End the Subgraph editing session and finalize the Subgraph build.
+
+        After exiting, this instance forwards __call__() to a factory for an
+        operation that carries out the work in the subgraph with inputs bound
+        in the current context as defined by ``variables``.
+        """
+        self._factory = self.build()
+
+        context = pop_context()
+        assert context is self._subgraph_context
+        self.__dict__['_editing'] = False
         # Returning False causes exceptions in the `with` block to be reraised.
         # Remember to switch this to return True if we want to transform or suppress
         # such an exception (we probably do).
@@ -1975,8 +2312,13 @@ class Subgraph(object, metaclass=GraphMeta):
             logger.debug('Subgraph exception traceback: \n{}'.format(exc_tb))
         return False
 
+    def __call__(self):
+        # TODO: After build() has been called, this should dispatch to a factory
+        #  that returns an OperationHandle.
+        return self._factory()
 
-def while_loop(*, operation, condition):
+
+def while_loop(*, operation, condition, max_iteration=10):
     """Generate and run a chain of operations such that condition evaluates True.
 
     Returns and operation instance that acts like a single node in the current
@@ -2018,14 +2360,43 @@ def while_loop(*, operation, condition):
         self._operation.output.
 
     """
-    obj = operation()
-    outputs = {name: descriptor.dtype for name, descriptor in obj.output.items()}
+    # In the first implementation, Subgraph is NOT and OperationHandle.
+    # if not isinstance(obj, AbstractOperationHandle):
+    #     raise exceptions.UsageError('"operation" key word argument must be a callable that produces an Operation handle.')
+    # outputs = {}
+    # for name, descriptor in obj.output.items():
+    #     outputs[name] = descriptor._dtype
 
-    def run_loop():
+    # 1. Get the initial inputs.
+    # 2. Initialize the subgraph with the initial inputs.
+    # 3. Run the subgraph.
+    # 4. Get the outputs.
+    # 5. Initialize the subgraph with the outputs.
+    # 6. Go to 3 if condition is not met.
+
+    obj = operation()
+    assert hasattr(obj, 'values')
+    outputs = {key: type(value) for key, value in obj.values.items()}
+
+    @function_wrapper(output=outputs)
+    def run_loop(output: OutputCollectionDescription):
+        iteration = 0
         obj = operation()
-        while (not condition(obj)):
-            obj.reset()
+        logger.debug('Created object {}'.format(obj))
+        logger.debug(', '.join(['{}: {}'.format(key, obj.values[key]) for key in obj.values]))
+        logger.debug('Condition: {}'.format(condition(obj)))
+        while (condition(obj)):
+            logger.debug('Running iteration {}'.format(iteration))
             obj.run()
+            logger.debug(
+                ', '.join(['{}: {}'.format(key, obj.values[key]) for key in obj.values]))
+            logger.debug('Condition: {}'.format(condition(obj)))
+            iteration += 1
+            if iteration > max_iteration:
+                break
+        for name in outputs:
+            setattr(output, name, obj.values[name])
+
         return obj
 
     return run_loop
@@ -2059,7 +2430,7 @@ def while_loop(*, operation, condition):
 #     return UserSubgraph()
 
 def subgraph(variables=None):
-    """Make a fused operation that can be used in a gmxapi.while_loop.
+    """Allow operations to be configured in a sub-context.
 
     The object returned functions as a Python context manager. When entering the
     context manager (the beginning of the ``with`` block), the object has an
@@ -2074,3 +2445,10 @@ def subgraph(variables=None):
     When the object is run, operations bound to the variables are ``reset`` and
     run to update the variables.
     """
+    # Implementation note:
+    # A Subgraph (type) has a subgraph context associated with it. The subgraph's
+    # ability to capture operation additions is implemented in terms of the
+    # subgraph context.
+    logger.debug('Declare a new subgraph with variables {}'.format(variables))
+
+    return SubgraphBuilder(variables)

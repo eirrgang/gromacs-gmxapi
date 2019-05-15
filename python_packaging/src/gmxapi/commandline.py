@@ -248,7 +248,19 @@ def commandline_operation(executable=None,
     # output_files is essentially passed through, but we need assurance that results
     # will not be published until the rest of the operation has run (i.e. the cli() executable.)
 
-    # TODO: (FR4+) Characterize the dictionary key type: explicitly sequences rather than maybe-string/maybe-sequence-of-strings
+    # Warning: decorating a local function like this is counter to the notion of Operations
+    # as portable (importable, serializable/deserializable). The big picture here needs
+    # some more consideration.
+    # TODO: (NOW) Distinguish portable Operations from relocatable Futures.
+    # There is nothing antithetical about objects implementing gmxapi data interfaces
+    # that are only resolvable by a certain Context as long as that Context can convey
+    # the results to another Context upon request. Re-instantiating Operations is
+    # only one way of relocating Futures. In this case, though, the dynamic creation of
+    # merged_ops doesn't seem right, and commandline_operation should probably be
+    # a proper Operation.
+    #
+    # TODO: (FR4+) Characterize the `file` dictionary key type:
+    #  explicitly sequences rather than maybe-string/maybe-sequence-of-strings
     @gmx.function_wrapper(output={'erroroutput': str, 'returncode': int, 'file': dict})
     def merged_ops(erroroutput: str = None, returncode: int = None, file: dict = None,
                    output: OutputCollectionDescription = None):
