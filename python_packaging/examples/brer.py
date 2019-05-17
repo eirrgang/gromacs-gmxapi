@@ -29,7 +29,7 @@ initial_tpr = gmx.commandline_operation(
         '-c': starting_structure
     })
 
-tpr_list = list([initial_tpr for _ in range(N)])      # A list of (the same) input file
+tpr_list = list([initial_tpr for _ in range(N)])  # A list of (the same) input file
 initial_input = gmx.read_tpr(tpr_list)  # An array of N simulations
 
 # just to demonstrate gmxapi functionality, modify a parameter here

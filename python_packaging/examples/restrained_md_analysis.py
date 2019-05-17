@@ -4,6 +4,7 @@ import gmx
 # js_tools.py is hypothetical and not included with these examples.
 from js_tools import js_calculation, tol
 
+
 class CalculateJS:
     def __init__(self, params=None, simulation_distances=None):
         """ Do JS-Div calculation """

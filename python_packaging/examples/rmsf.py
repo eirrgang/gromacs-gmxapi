@@ -23,7 +23,7 @@ initial_tpr = gmx.commandline_operation(
 
 # Note: initial_tpr has a single output that can be automatically broadcast now or later.
 # Broadcast to the read_tpr operation:
-#simulation_input = gmx.read_tpr([initial_tpr for _ in range(N)])
+# simulation_input = gmx.read_tpr([initial_tpr for _ in range(N)])
 # Wait to broadcast until the next operation:
 simulation_input = gmx.read_tpr(initial_tpr.output.file['-o'])
 

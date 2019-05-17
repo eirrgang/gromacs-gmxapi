@@ -9,8 +9,6 @@ DOI: `10.1093/bioinformatics/bty484 <https://doi.org/10.1093/bioinformatics/bty4
 
 # Restrained-ensemble formalism is a variant of that defined by Roux et al., 2013
 
-import os
-import sys
 import json
 
 import gmx
@@ -19,14 +17,14 @@ from restrained_md_analysis import calculate_js
 
 # The user has already built 20 input files in 20 directories for an ensemble of width 20.
 N = 100
-starting_structure = 'input_conf.gro' # Could start with a list of distinct confs
+starting_structure = 'input_conf.gro'
 topology_file = 'input.top'
 run_parameters = 'params.mdp'
 
 initial_tpr = gmx.commandline_operation('gmx', 'grompp',
                                         input={'-f': run_parameters,
-                                        '-p': topology_file,
-                                        '-c': starting_structure})
+                                               '-p': topology_file,
+                                               '-c': starting_structure})
 initial_input = gmx.read_tpr([initial_tpr for _ in range(N)])  # An array of simulations
 
 with open('params1.json', 'r') as fh:
@@ -58,12 +56,13 @@ with converge:
     md.interface.potential.add(potential1)
     md.interface.potential.add(potential2)
 
-    # Compare the distribution from the current iteration to the experimental data and look for a threshold of low J-S divergence
+    # Compare the distribution from the current iteration to the experimental
+    # data and look for a threshold of low J-S divergence
     # We perform the calculation using all of the ensemble data.
     js_1 = calculate_js(input={'params': restraint1_params,
-                        'simulation_distances': gmx.gather(potential1.output.pair_distance)})
+                               'simulation_distances': gmx.gather(potential1.output.pair_distance)})
     js_2 = calculate_js(input={'params': restraint2_params,
-                        'simulation_distances': gmx.gather(potential2.output.pair_distance)})
+                               'simulation_distances': gmx.gather(potential2.output.pair_distance)})
     gmx.logical_and(js_1.is_converged, js_2.is_converged, label='is_converged')
 
     converge.pair_distance1 = potential1.output.pair_distance
