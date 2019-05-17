@@ -15,6 +15,21 @@ gmxapi
 
 ## Examples
 
+### `brer.py`
+
+BRER simulation-analysis protocol implemented as a gmxapi script, with a Python analysis
+ module (`brer_tools.py` not implemented here) and C++ MD extension code (`myplugin.so` also not shown).
+
+### `restrained_ensemble.py`
+
+Restrained ensemble example script using restraint potentials implemented in `myplugin` (not shown) and analysis code
+ expressed in `restrained_md_analysis.py`.
+
+### `rmsf.py`
+
+Run simulations with a range of `tau-t` values and analyze
+with the `gmx rmsf` tool.
+
 ### `run_adaptive_msm.py`
 
 Use custom analysis code from `analysis.py` to set the initial conformations for iterations of simulation batches.
