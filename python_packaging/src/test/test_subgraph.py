@@ -43,8 +43,8 @@ def add_float(a: float, b: float) -> float:
 
 
 @gmx.function_wrapper(output={'data': bool})
-def less_than(a: float, b: float) -> bool:
-    return a < b
+def less_than(lhs: float, rhs: float) -> bool:
+    return lhs < rhs
 
 
 # def test_subgraph_class():
@@ -64,11 +64,9 @@ def less_than(a: float, b: float) -> bool:
 def test_subgraph_function():
     subgraph = gmx.subgraph(variables={'float_with_default': 1.0, 'bool_data': True})
     with subgraph:
-        data = add_float(subgraph.float_with_default, 1.).output.data
         # Define the update for float_with_default to come from an add_float operation.
-        subgraph.float_with_default = data
-        # Error: race condition? subgraph.float_with_default points to previous value?
-        subgraph.bool_data = less_than(data, 6.).output.data
+        subgraph.float_with_default = add_float(subgraph.float_with_default, 1.).output.data
+        subgraph.bool_data = less_than(lhs=subgraph.float_with_default, rhs=6.).output.data
     operation_instance = subgraph()
     operation_instance.run()
     assert operation_instance.values['float_with_default'] == 2.

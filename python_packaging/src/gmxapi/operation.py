@@ -262,7 +262,7 @@ class InputCollectionDescription(collections.OrderedDict):
         # For convenience, accept *args, but convert to **kwargs to pass to Operation.
         # Factory accepts an unadvertised `input` keyword argument that is used as a default kwargs dict.
         # If present, kwargs['input'] is treated as an input "pack" providing _default_ values.
-        input_kwargs = {}
+        input_kwargs = collections.OrderedDict()
         # Note: we have also been allowing arguments with a `run` attribute to be used as execution dependencies, but we should probably stop that.
         # TODO: (FR4) generalize
         execution_dependencies = []
@@ -450,7 +450,7 @@ def define_publishing_data_proxy(output_description) -> typing.Type[DataProxyBas
     # We should encapsulate these relationships in Context details, explicit collaborations
     # between specific operations and Contexts, and in groups of Operation definition helpers.
 
-    descriptors = {name: Publisher(name) for name in output_description}
+    descriptors = collections.OrderedDict([(name, Publisher(name)) for name in output_description])
 
     class PublishingDataProxy(DataProxyBase, descriptors=descriptors):
         """Handler for write access to the `output` of an operation.
@@ -1967,8 +1967,16 @@ class GraphMeta(type):
     """
     _prepare_keywords = ('variables',)
 
+    # TODO: Python 3.7.2 introduces typing.OrderedDict
+    # In practice, we are using collections.OrderedDict, but we should use the generic
+    # ABC from the typing module to avoid being overly restrictive with type hints.
+    try:
+        from typing import OrderedDict
+    except ImportError:
+        from collections import OrderedDict
+
     @classmethod
-    def __prepare__(mcs, name, bases, variables: dict = None, **kwargs):
+    def __prepare__(mcs, name, bases, variables: OrderedDict = None, **kwargs):
         """Prepare the class namespace.
 
         Keyword Args:
@@ -2099,7 +2107,7 @@ class SubgraphContext(Context):
     def __init__(self):
         self.labels = {}
         self.resetters = set()
-        self.work_graph = {}
+        self.work_graph = collections.OrderedDict()
 
     def node_builder(self, label=None) -> NodeBuilder:
         if label is not None:
@@ -2182,12 +2190,18 @@ class SubgraphBuilder(object):
 
     def __init__(self, variables):
         self.__dict__.update({'variables': variables,
-                              '_staging': {},
+                              '_staging': collections.OrderedDict(),
                               '_editing': False,
                               '_subgraph_context': None,
                               '_subgraph_instance': None,
                               '_fused_operation': None,
                               '_factory': None})
+        # Return a placeholder that we can update during iteration.
+        # Long term, this is probably implemented with data descriptors
+        # that will be moved to a new Subgraph type object.
+        for name in self.variables:
+            if not isinstance(self.variables[name], Future):
+                self.variables[name] = gmx.make_constant(self.variables[name])
 
         # class MySubgraph(Subgraph, variables=variables):
         #     pass
@@ -2197,17 +2211,16 @@ class SubgraphBuilder(object):
     def __getattr__(self, item):
         if self._editing:
             if item in self.variables:
-                logger.debug('Read access to subgraph variable {}'.format(item))
-                # Return a placeholder that we can update during iteration.
-                # Long term, this is probably implemented with data descriptors
-                # that will be moved to a new Subgraph type object.
-                if not isinstance(self.variables[item], Future):
-                    future = gmx.make_constant(self.variables[item])
-                    self.variables[item] = future
-                return self.variables[item]
+                if item in self._staging:
+                    logger.debug('Read access to intermediate value of subgraph variable {}'.format(item))
+                    return self._staging[item]
+                else:
+                    logger.debug('Read access to subgraph variable {}'.format(item))
+                    return self.variables[item]
             else:
                 raise AttributeError('Invalid attribute: {}'.format(item))
         else:
+            # TODO: this is not quite the described interface...
             return lambda obj: obj.values[item]
 
     def __setattr__(self, key, value):
@@ -2227,6 +2240,12 @@ class SubgraphBuilder(object):
         if not self._editing:
             raise exceptions.UsageError('Subgraph is not in an editable state.')
         # Else, stage the potential final value for the iteration.
+        logger.debug('Staging subgraph update {} = {}'.format(key, value))
+        # Return a placeholder that we can update during iteration.
+        # Long term, this is probably implemented with data descriptors
+        # that will be moved to a new Subgraph type object.
+        if not isinstance(value, Future):
+            value = gmx.make_constant(value)
         self._staging[key] = value
 
     def __enter__(self):
@@ -2271,28 +2290,32 @@ class SubgraphBuilder(object):
         TODO: Explore how to drop work from the graph once there are no more
          references to its output, including check-point machinery.
         """
-        inputs = {}
+        logger.debug('Finalizing subgraph definition.')
+        inputs = collections.OrderedDict()
         for key, value in self.variables.items():
-            if isinstance(value, Future):
-                inputs[key] = value
-            else:
-                # TODO: What if we don't want to provide default values?
-                inputs[key] = gmx.make_constant(value)
+            # TODO: What if we don't want to provide default values?
+            inputs[key] = value
 
         updates = self._staging
 
         class Subgraph(object):
             def __init__(self, input_futures, update_sources):
-                self.values = {key: value.result() for key, value in input_futures.items()}
-                self.futures = {key: value for key, value in input_futures.items()}
-                self.update_sources = {key: value for key, value in update_sources.items()}
+                self.values = collections.OrderedDict([(key, value.result()) for key, value in input_futures.items()])
+                logger.debug('subgraph initialized with {}'.format(
+                    ', '.join(['{}: {}'.format(key, value) for key, value in self.values.items()])))
+                self.futures = collections.OrderedDict([(key, value) for key, value in input_futures.items()])
+                self.update_sources = collections.OrderedDict([(key, value) for key, value in update_sources.items()])
+                logger.debug('Subgraph updates staged:')
+                for update, source in self.update_sources.items():
+                    logger.debug('    {} = {}'.format(update, source))
 
             def run(self):
-                for name in self.values:
-                    if name in self.update_sources:
-                        self.values[name] = self.update_sources[name].result()
+                for name in self.update_sources:
+                    result = self.update_sources[name].result()
+                    logger.debug('Update: {} = {}'.format(name, result))
+                    self.values[name] = result
                 # Replace the data sources in the futures.
-                for name in self.futures:
+                for name in self.update_sources:
                     self.futures[name].resource_manager = gmx.make_constant(self.values[name]).resource_manager
                 for name in self.update_sources:
                     self.update_sources[name]._reset()
@@ -2385,7 +2408,7 @@ def while_loop(*, operation, condition, max_iteration=10):
 
     obj = operation()
     assert hasattr(obj, 'values')
-    outputs = {key: type(value) for key, value in obj.values.items()}
+    outputs = collections.OrderedDict([(key, type(value)) for key, value in obj.values.items()])
 
     @function_wrapper(output=outputs)
     def run_loop(output: OutputCollectionDescription):
