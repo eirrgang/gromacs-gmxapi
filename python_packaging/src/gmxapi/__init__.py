@@ -118,6 +118,8 @@ from . import datamodel
 # from .context import ContextCharacteristics as ContextCharacteristics
 from . import datamodel
 from . import exceptions
+from . fileio import *
+__all__ += fileio.__all__
 from .operation import computed_result, function_wrapper, make_operation
 from .commandline import commandline_operation
 from .datamodel import ndarray, NDArray
