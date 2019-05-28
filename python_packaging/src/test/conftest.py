@@ -121,7 +121,7 @@ def gmxcli():
 
 
 @pytest.fixture(scope='class')
-def spc216(gmxcli):
+def spc_water_box(gmxcli):
     """Provide a TPR input file for a simple simulation.
 
     Prepare the MD input in a freshly created working directory.
@@ -169,7 +169,7 @@ def spc216(gmxcli):
                                         )
     if solvate.output.returncode.result() != 0:
         logging.debug(solvate.output.erroroutput.result())
-        raise RuntimeError('solvate failed in spc216 testing fixture.')
+        raise RuntimeError('solvate failed in spc_water_box testing fixture.')
 
     mdp_input = [('integrator', 'md'),
                  ('cutoff-scheme', 'Verlet'),
@@ -202,7 +202,7 @@ def spc216(gmxcli):
     tprfilename = grompp.output.file['-o'].result()
     if grompp.output.returncode.result() != 0:
         logging.debug(grompp.output.erroroutput.result())
-        raise RuntimeError('grompp failed in spc216 testing fixture.')
+        raise RuntimeError('grompp failed in spc_water_box testing fixture.')
 
     # TODO: more inspection of grompp errors...
     assert os.path.exists(tprfilename)

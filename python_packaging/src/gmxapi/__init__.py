@@ -94,6 +94,7 @@ from gmxapi import _logging
 
 __all__ = ['commandline_operation',
            'concatenate_lists',
+           'context',
            'exceptions',
            'function_wrapper',
            'logger',
@@ -103,6 +104,7 @@ __all__ = ['commandline_operation',
            'operation',
            'read_tpr',
            'version',
+           'workflow',
            '__version__']
 
 import collections
@@ -116,14 +118,20 @@ from ._logging import logger
 from . import _gmxapi
 from . import datamodel
 # from .context import ContextCharacteristics as ContextCharacteristics
+from . import context
 from . import datamodel
 from . import exceptions
+from . import workflow
 from . fileio import *
 __all__ += fileio.__all__
 from .operation import computed_result, function_wrapper, make_operation
 from .commandline import commandline_operation
 from .datamodel import ndarray, NDArray
 from .version import __version__
+
+
+class SimulationOperation(object):
+    pass
 
 
 def mdrun(input=None):
@@ -148,17 +156,7 @@ def mdrun(input=None):
         "test_particle_insertion," "legacy_simulation" (do_md), or "simulation"
         composition (which may be leap-frog, vv, and other algorithms)
     """
-    try:
-        filename = os.path.abspath(input)
-    except Exception as E:
-        raise exceptions.ValueError('input must be a valid file name.') from E
-    try:
-        system = _gmxapi.from_tpr(filename)
-        context = _gmxapi.Context()
-        md = system.launch(context)
-    except Exception as e:
-        raise exceptions.ApiError('Unhandled error from library: {}'.format(e)) from e
-    return md
+    return workflow.from_tpr(input)
 
 
 @computed_result
