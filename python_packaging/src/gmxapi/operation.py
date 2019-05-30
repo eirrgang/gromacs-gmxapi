@@ -1971,7 +1971,7 @@ class GraphMeta(type):
     # In practice, we are using collections.OrderedDict, but we should use the generic
     # ABC from the typing module to avoid being overly restrictive with type hints.
     try:
-        import typing.OrderedDict as OrderedDict
+        from typing import OrderedDict
     except ImportError:
         from collections import OrderedDict
 
