@@ -116,7 +116,7 @@ def gmxcli():
     try:
         assert os.access(command, os.X_OK)
     except Exception as E:
-        raise RuntimeError('"{}" is not an executable gmx wrapper program') from E
+        raise RuntimeError('"{}" is not an executable gmx wrapper program'.format(command)) from E
     yield command
 
 
