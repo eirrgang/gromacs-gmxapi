@@ -160,7 +160,7 @@ def mdrun(input=None):
 
 
 @computed_result
-def join_arrays(a: NDArray = (), b: NDArray = ()) -> NDArray:
+def join_arrays(*, front: NDArray = (), back: NDArray = ()) -> NDArray:
     """Operation that consumes two sequences and produces a concatenated single sequence.
 
     Note that the exact signature of the operation is not determined until this
@@ -175,12 +175,12 @@ def join_arrays(a: NDArray = (), b: NDArray = ()) -> NDArray:
     # TODO: figure out a better annotation.
     """
     # TODO: (FR4) Returned list should be an NDArray.
-    if isinstance(a, (str, bytes)) or isinstance(b, (str, bytes)):
+    if isinstance(front, (str, bytes)) or isinstance(back, (str, bytes)):
         raise exceptions.ValueError('Input must be a pair of lists.')
-    assert isinstance(a, NDArray)
-    assert isinstance(b, NDArray)
-    new_list = list(a._values)
-    new_list.extend(b._values)
+    assert isinstance(front, NDArray)
+    assert isinstance(back, NDArray)
+    new_list = list(front._values)
+    new_list.extend(back._values)
     return new_list
 
 
@@ -197,7 +197,7 @@ def concatenate_lists(sublists: list = ()):
     if len(sublists) == 0:
         return ndarray([])
     else:
-        return join_arrays(a=sublists[0], b=concatenate_lists(sublists[1:]))
+        return join_arrays(front=sublists[0], back=concatenate_lists(sublists[1:]))
 
 
 def make_constant(value: Scalar):

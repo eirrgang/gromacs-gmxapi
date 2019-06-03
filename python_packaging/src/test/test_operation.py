@@ -76,7 +76,7 @@ class ImmediateResultTestCase(unittest.TestCase):
         list_result = gmx.concatenate_lists(sublists=[list_b])
         assert list_result.result()[0] == 42
 
-        list_result = gmx.join_arrays(list_a, list_b)
+        list_result = gmx.join_arrays(front=list_a, back=list_b)
         assert len(list_result.result()) == len(list_a) + 1
         assert tuple(list_result.result()) == tuple(list(list_a) + [42])
 

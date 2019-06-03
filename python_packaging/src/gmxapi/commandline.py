@@ -203,7 +203,7 @@ def filemap_to_flag_list(filemap: dict = None):
                     value.result = lambda function=result_function: [function()]
                 else:
                     value = [value]
-            result = gmx.join_arrays(a=result, b=gmx.join_arrays(a=[key], b=value))
+            result = gmx.join_arrays(front=result, back=gmx.join_arrays(front=[key], back=value))
     return result
 
 
