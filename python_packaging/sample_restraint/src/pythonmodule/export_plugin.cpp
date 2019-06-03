@@ -403,7 +403,7 @@ std::unique_ptr<HarmonicRestraintBuilder> createHarmonicBuilder(const py::object
  * \param element WorkElement provided through Context
  * \return ownership of new builder object
  */
-std::unique_ptr<EnsembleRestraintBuilder> createEnsembleBuilder(const py::object element)
+std::unique_ptr<EnsembleRestraintBuilder> createEnsembleBuilder(const py::object& element)
 {
     using gmx::compat::make_unique;
     auto builder = make_unique<EnsembleRestraintBuilder>(element);
