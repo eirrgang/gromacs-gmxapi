@@ -115,23 +115,23 @@ import gmxapi._logging
 from . import version
 from ._logging import logger
 
-from . import _gmxapi
 from . import datamodel
-# from .context import ContextCharacteristics as ContextCharacteristics
 from . import context
 from . import datamodel
 from . import exceptions
 from . import workflow
+from . import fileio
 from . fileio import *
-__all__ += fileio.__all__
+
+
 from .operation import computed_result, function_wrapper, make_operation
 from .commandline import commandline_operation
 from .datamodel import ndarray, NDArray
 from .version import __version__
 
-
-class SimulationOperation(object):
-    pass
+#
+# class SimulationOperation(object):
+#     pass
 
 
 def mdrun(input=None):
@@ -157,6 +157,31 @@ def mdrun(input=None):
         composition (which may be leap-frog, vv, and other algorithms)
     """
     return workflow.from_tpr(input)
+
+
+# TODO: fix make_operation
+# read_tpr = make_operation(fileio._SimulationInput, output={'parameters': dict})
+@function_wrapper(output={'parameters': dict, 'topology': str, 'coordinates': str, 'simulation_state': str})
+def read_tpr(filename: str = '', output=None):
+    """Get simulation input sources from a TPR file.
+
+    Outputs:
+        parameters : MDP simulation parameters
+        coordinates : atom (or CG particle) coordinates (not yet implemented)
+        simulation_state : simulation internal state (checkpoint data) (not yet implemented)
+        topology : molecular force field data (not yet implemented)
+    """
+    sim_input = fileio.read_tpr(filename)
+    output._internal = sim_input
+    output.parameters = sim_input.parameters.extract()
+    output.topology = filename
+    output.coordinates = filename
+    output.simulation_state = filename
+
+
+# @function_wrapper(output={'parameters': dict})
+# def modify_input(parameters: dict = None, output=None):
+#     output.parameters = parameters
 
 
 @computed_result
@@ -343,13 +368,3 @@ def File(suffix=''):
         expecting a particular suffix.
     """
     assert not version.has_feature('fr21')
-
-
-def modify_input():
-    pass
-
-
-@function_wrapper()
-def read_tpr(tprfile: str = '') -> str:
-    """Prepare simulation input pack from a TPR file."""
-    return tprfile

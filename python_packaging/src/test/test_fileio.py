@@ -11,7 +11,7 @@ from gmxapi.exceptions import UsageError
 
 
 @pytest.mark.usefixtures('cleandir')
-def test_tprfile_read(spc_water_box):
+def test_tprfile_read_old(spc_water_box):
     tpr_filename = spc_water_box
     with pytest.raises(UsageError):
         TprFile(tpr_filename, 'x')
@@ -24,6 +24,15 @@ def test_tprfile_read(spc_water_box):
         params = cpp_object.params().extract()
         assert "nsteps" in params
         assert "foo" not in params
+
+
+@pytest.mark.usefixtures('cleandir')
+def test_tprfile_read(spc_water_box):
+    tprfile = gmxapi.read_tpr(spc_water_box)
+    assert hasattr(tprfile, 'output')
+    assert hasattr(tprfile.output, 'parameters')
+    nsteps = tprfile.output.parameters['nsteps'].result()
+    assert nsteps > 0
 
 
 @pytest.mark.usefixtures('cleandir')

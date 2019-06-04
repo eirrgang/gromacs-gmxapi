@@ -263,13 +263,15 @@ class InputCollectionDescription(collections.OrderedDict):
         # Factory accepts an unadvertised `input` keyword argument that is used as a default kwargs dict.
         # If present, kwargs['input'] is treated as an input "pack" providing _default_ values.
         input_kwargs = collections.OrderedDict()
-        # Note: we have also been allowing arguments with a `run` attribute to be used as execution dependencies, but we should probably stop that.
+        # Note: we have also been allowing arguments with a `run` attribute
+        # to be used as execution dependencies, but we should probably stop that.
         # TODO: (FR4) generalize
         execution_dependencies = []
         if 'input' in kwargs:
             provided_input = kwargs.pop('input')
             if provided_input is not None:
-                # Note: we have also been allowing arguments with a `run` attribute to be used as execution dependencies, but we should probably stop that.
+                # Note: we have also been allowing arguments with a `run` attribute
+                # to be used as execution dependencies, but we should probably stop that.
                 if hasattr(provided_input, 'run'):
                     execution_dependencies.append(provided_input)
                     # Note that execution_dependencies is not used after this point.
@@ -1837,6 +1839,14 @@ def make_operation(implementation=None, input: dict = None, output: dict = None,
 
     For an Operation implemented as a function, see function_wrapper().
 
+    For an Operation implemented as a class named MyOperation, generate a factory
+    function named "my_operation" with syntax like the following, in which "input"
+    and "output" are dictionaries mapping constructor arguments and object attributes
+    (respectively) to Python data types.
+
+    Example:
+        my_operation = make_operation(MyOperation, input={...}, output={...})
+
     Can also be used as a parameterized class decorator.
 
         @make_operation(input={...}, output={...})
@@ -1875,9 +1885,11 @@ def make_operation(implementation=None, input: dict = None, output: dict = None,
     # we use a protocol mapping named operations to importable code.
     if hasattr(implementation, '__module__') and hasattr(implementation, '__name__'):
         try:
-            module = importlib.util.resolve_name(implementation.__module__)
+            module = importlib.util.resolve_name(name=implementation.__module__,
+                                                 package=None)
             spec = importlib.util.find_spec(module)
         except ValueError:
+            module = None
             spec = None
     else:
         raise exceptions.ValueError(
@@ -1886,11 +1898,22 @@ def make_operation(implementation=None, input: dict = None, output: dict = None,
     if spec is None:
         raise exceptions.UsageError('make_operation can only produce Operations from importable Python code.')
     else:
-        module = importlib.util.module_from_spec(spec)
         name = implementation.__name__
+        module = spec.loader.exec_module(module)
         assert hasattr(module, name)
 
     logger.info('Generating factory for {} from {}'.format(name, spec))
+
+    # Define and dynamically execute a wrapper definition.
+    source = ['def wrapper(output, {}):',
+              '    obj = implementation({})',
+              '    for out in output:',
+              '        setattr(output, out, getattr(obj, out))',
+              ''
+              ]
+    source[0] = source[0].format()
+    source[1] = source[1].format()
+    compile(source=source, filename=spec, mode='exec')
 
     # TODO: Use `input` kwarg
     # to define a InputCollectionDescription and generate documentation for the factory.
@@ -2394,7 +2417,8 @@ def while_loop(*, operation, condition, max_iteration=10):
     """
     # In the first implementation, Subgraph is NOT and OperationHandle.
     # if not isinstance(obj, AbstractOperationHandle):
-    #     raise exceptions.UsageError('"operation" key word argument must be a callable that produces an Operation handle.')
+    #     raise exceptions.UsageError(
+    #     '"operation" key word argument must be a callable that produces an Operation handle.')
     # outputs = {}
     # for name, descriptor in obj.output.items():
     #     outputs[name] = descriptor._dtype

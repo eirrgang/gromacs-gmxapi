@@ -18,7 +18,7 @@ class TprFile:
     """Handle to a Gromacs simulation run input file.
     """
 
-    def __init__(self, filename=None, mode=None):
+    def __init__(self, filename: str = None, mode: str = 'r'):
         """Open a TPR file.
 
         File access mode is indicated by 'r' for read-only access.
@@ -107,10 +107,13 @@ class _SimulationInput(object):
 
     """
 
-    def __init__(self, tprfile):
+    def __init__(self, tprfile: str = None):
         if not isinstance(tprfile, TprFile):
-            # This class is an implementation detail of TPR file I/O...
-            raise exceptions.ApiError("Must be initialized from a gmx.fileio.TprFile object.")
+            try:
+                tprfile = TprFile(tprfile)
+            except Exception:
+                # This class is an implementation detail of TPR file I/O...
+                raise exceptions.ApiError("Must be initialized from a gmx.fileio.TprFile object.")
         self.__tprfile = tprfile
         self.__parameters = None
 
@@ -168,6 +171,7 @@ def read_tpr(tprfile=None):
 
 # In initial implementation, we extract the entire TPR file contents through the
 # TPR-backed GmxMdParams implementation.
+# Note: this function is not consistent with a gmxapi operation.
 def write_tpr_file(output, input=None):
     """
     Create a new TPR file, combining user-provided input.
