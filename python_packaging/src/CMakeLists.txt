@@ -135,7 +135,7 @@ if(SKBUILD)
     # named for the Python package as in setup.py.
     install(TARGETS _gmxapi LIBRARY DESTINATION gmxapi)
 else()
-    # TODO: Determine packaging and installation cases and implementation.
+    # TODO: (#2896) Determine packaging and installation cases and implementation.
     # Reference https://redmine.gromacs.org/issues/2896 for additional discussion.
     # Currently, CMake should be run by scikit-build through setup.py for proper Python packaging.
     # Try to do something sensible. Collect Python sources as setup.py would.

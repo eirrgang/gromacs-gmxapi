@@ -73,8 +73,8 @@ execute_process(COMMAND "${Python3_EXECUTABLE}" "-c"
                 "import pygments"
                 RESULT_VARIABLE _pygments_status
                 ERROR_QUIET OUTPUT_STRIP_TRAILING_WHITESPACE)
-if (_pygments_status)
-    set(Sphinx_pygments_FOUND 1)
+if (_pygments_status EQUAL 0)
+    set(Sphinx_pygments_FOUND TRUE)
 endif()
 
 include(FindPackageHandleStandardArgs)

@@ -279,7 +279,7 @@ if(GMX_PHYSICAL_VALIDATION)
         if (NOT Python3_Interpreter_FOUND)
             message(FATAL_ERROR
                     "Python not found. Physical validation requires python. \
-                     Install python, set PYTHON_EXECUTABLE to a valid python location, \
+                     Install python, set Python3_EXECUTABLE to a valid python location, \
                      or set GMX_PHYSICAL_VALIDATION=OFF to disable the physical validation tests.")
         endif()
         #
@@ -289,7 +289,7 @@ if(GMX_PHYSICAL_VALIDATION)
             if(NOT PYTHONMODULE_${module_upper})
                 message(WARNING
                         "Python module ${module} not found. Physical validation relies on ${module}. Make sure\
-                        ${module} can be found by PYTHON_EXECUTABLE, or set GMX_PHYSICAL_VALIDATION=OFF to disable\
+                        ${module} can be found by Python3_EXECUTABLE, or set GMX_PHYSICAL_VALIDATION=OFF to disable\
                         the physical validation tests.")
             endif()
         endforeach()

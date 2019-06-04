@@ -43,61 +43,68 @@
  *  \author Jon Vincent <jvincent@nvidia.com>
  */
 
+#include "gromacs/gpu_utils/vectype_ops.cuh"
 #include "gromacs/nbnxm/nbnxm.h"
 
 /*! \brief CUDA kernel for transforming position coordinates from rvec to nbnxm layout.
  *
- * \param[in]     ncxy      extent of cell-level parallelism
- * \param[out]    xnb       position buffer in nbnxm layout
- * \param[in]     g         grid index
- * \param[in]     FillLocal boolean to specify if Fill Local is true
- * \param[in]     x         position buffer
- * \param[in]     a         atom index mapping stride between atoms in memory
- * \param[in]     na_all    array of extents
- * \param[in]     cxy_ind   array of cell indices
- * \param[in]     cell0     first cell
- * \param[in]     na_sc     number of atoms per cell
- */
-//TODO improve/simplify/document use of na_all and na_round
-__global__ void nbnxn_gpu_x_to_nbat_x_kernel(int         ncxy,
-                                             float      *xnb,
-                                             int         g,
-                                             bool        FillLocal,
-                                             const rvec *x,
-                                             const int  *a,
-                                             const int  *na_all,
-                                             const int  *cxy_ind,
-                                             int         cell0,
-                                             int         na_sc);
+ * TODO:
+ *  - improve/simplify/document use of cxy_na and na_round
+ *  - rename kernel so naming matches with the other NBNXM kernels;
+ *  - enable separate compilation unit
 
-__global__ void nbnxn_gpu_x_to_nbat_x_kernel(int         ncxy,
-                                             float      *xnb,
-                                             int         g,
-                                             bool        FillLocal,
-                                             const rvec *x,
-                                             const int  *a,
-                                             const int  *na_all,
-                                             const int  *cxy_ind,
-                                             int         cell0,
-                                             int         na_sc)
+ * \param[in]     numColumns        extent of cell-level parallelism
+ * \param[out]    xnb               position buffer in nbnxm layout
+ * \param[in]     gridIndex         grid index
+ * \param[in]     FillLocal         boolean to specify if Fill Local is true
+ * \param[in]     x                 position buffer
+ * \param[in]     a                 atom index mapping stride between atoms in memory
+ * \param[in]     cxy_na            array of extents
+ * \param[in]     cxy_ind           array of cell indices
+ * \param[in]     cellOffset        first cell
+ * \param[in]     numAtomsPerCell   number of atoms per cell
+ */
+__global__ void nbnxn_gpu_x_to_nbat_x_kernel(int                         numColumns,
+                                             float *  __restrict__       xnb,
+                                             int                         gridIndex,
+                                             bool                        FillLocal,
+                                             const rvec *  __restrict__  x,
+                                             const int *  __restrict__   a,
+                                             const int *  __restrict__   cxy_na,
+                                             const int *  __restrict__   cxy_ind,
+                                             int                         cellOffset,
+                                             int                         numAtomsPerCell);
+
+
+__global__ void nbnxn_gpu_x_to_nbat_x_kernel(int                         numColumns,
+                                             float *  __restrict__       xnb,
+                                             int                         gridIndex,
+                                             bool                        FillLocal,
+                                             const rvec *  __restrict__  x,
+                                             const int *  __restrict__   a,
+                                             const int *  __restrict__   cxy_na,
+                                             const int *  __restrict__   cxy_ind,
+                                             int                         cellOffset,
+                                             int                         numAtomsPerCell)
 {
 
 
-    const float farAway = -1000000;
+    const float farAway = -1000000.0f;
 
     /* map cell-level parallelism to y component of CUDA block index */
     int cxy = blockIdx.y;
 
-    if (cxy < ncxy)
+    if (cxy < numColumns)
     {
 
-        int na = na_all[cxy];
-        int a0 = (cell0 + cxy_ind[cxy])*na_sc;
+        int na = cxy_na[cxy];
+        int a0 = (cellOffset + cxy_ind[cxy])*numAtomsPerCell;
         int na_round;
-        if (g == 0 && FillLocal)
+        if (gridIndex == 0 && FillLocal)
         {
+            // TODO: This can be done more efficiently
             na_round =
-                (cxy_ind[cxy+1] - cxy_ind[cxy])*na_sc;
+                (cxy_ind[cxy+1] - cxy_ind[cxy])*numAtomsPerCell;
         }
         else
         {
@@ -115,21 +122,19 @@ __global__ void nbnxn_gpu_x_to_nbat_x_kernel(int         ncxy,
 
         j0 = a0*STRIDE_XYZQ;
 
+        // destination address where x shoud be stored in nbnxm layout
+        float3 *x_dest = (float3 *)&xnb[j0 + 4*i];
+
         /* perform conversion of each element */
         if (i < na_round)
         {
             if (i < na)
             {
-
-                xnb[j0+4*i]   = x[a[a0+i]][XX];
-                xnb[j0+4*i+1] = x[a[a0+i]][YY];
-                xnb[j0+4*i+2] = x[a[a0+i]][ZZ];
+                *x_dest = *((float3 *)x[a[a0 + i]]);
             }
             else
             {
-                xnb[j0+4*i]   = farAway;
-                xnb[j0+4*i+1] = farAway;
-                xnb[j0+4*i+2] = farAway;
+                *x_dest = make_float3(farAway);
             }
         }
     }

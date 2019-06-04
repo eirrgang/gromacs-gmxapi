@@ -33,14 +33,14 @@
  * the research papers on the package. Check out http://www.gromacs.org.
  */
 /*! \internal
- * \brief Declares the integrator interface for mdrun
+ * \brief Declares the simulator interface for mdrun
  *
  * \author David van der Spoel <david.vanderspoel@icm.uu.se>
  * \author Mark Abraham <mark.j.abraham@gmail.com>
  * \ingroup module_mdrun
  */
-#ifndef GMX_MDRUN_INTEGRATOR_H
-#define GMX_MDRUN_INTEGRATOR_H
+#ifndef GMX_MDRUN_SIMULATOR_H
+#define GMX_MDRUN_SIMULATOR_H
 
 #include <cstdio>
 
@@ -74,6 +74,7 @@ class t_state;
 namespace gmx
 {
 
+enum class StartingBehavior;
 class BoxDeformation;
 class Constraints;
 class PpForceWorkload;
@@ -84,11 +85,11 @@ class MDAtoms;
 class StopHandlerBuilder;
 struct MdrunOptions;
 
-//! Function type for integrator code.
-using IntegratorFunctionType = void();
+//! Function type for simulator code.
+using SimulatorFunctionType = void();
 
 /*! \internal
- * \brief Struct to handle setting up and running the different "integrators".
+ * \brief Struct to handle setting up and running the different simulation types.
  *
  * This struct is a mere aggregate of parameters to pass to evaluate an
  * energy, so that future changes to names and types of them consume
@@ -99,7 +100,7 @@ using IntegratorFunctionType = void();
  * updated, then the member will be value initialized, which will
  * typically mean initialization to zero.
  *
- * Having multiple integrators as member functions isn't a good
+ * Having multiple simulation types as member functions isn't a good
  * design, and we definitely only intend one to be called, but the
  * goal is to make it easy to change the names and types of members
  * without having to make identical changes in several places in the
@@ -107,7 +108,7 @@ using IntegratorFunctionType = void();
  * approach.
  *
  * Use a braced initializer list to construct one of these. */
-struct Integrator
+struct Simulator
 {
     //! Handles logging.
     FILE                               *fplog;
@@ -125,6 +126,8 @@ struct Integrator
     const gmx_output_env_t             *oenv;
     //! Contains command-line options to mdrun.
     const MdrunOptions                 &mdrunOptions;
+    //! Whether the simulation will start afresh, or restart with/without appending.
+    StartingBehavior                    startingBehavior;
     //! Handles virtual sites.
     gmx_vsite_t                        *vsite;
     //! Handles constraints.
@@ -171,27 +174,27 @@ struct Integrator
     gmx_walltime_accounting            *walltime_accounting;
     //! Registers stop conditions
     std::unique_ptr<StopHandlerBuilder> stopHandlerBuilder;
-    //! Implements the normal MD integrators.
-    IntegratorFunctionType              do_md;
+    //! Implements the normal MD simulations.
+    SimulatorFunctionType               do_md;
     //! Implements the rerun functionality.
-    IntegratorFunctionType              do_rerun;
+    SimulatorFunctionType               do_rerun;
     //! Implements steepest descent EM.
-    IntegratorFunctionType              do_steep;
+    SimulatorFunctionType               do_steep;
     //! Implements conjugate gradient energy minimization
-    IntegratorFunctionType              do_cg;
+    SimulatorFunctionType               do_cg;
     //! Implements onjugate gradient energy minimization using the L-BFGS algorithm
-    IntegratorFunctionType              do_lbfgs;
+    SimulatorFunctionType               do_lbfgs;
     //! Implements normal mode analysis
-    IntegratorFunctionType              do_nm;
+    SimulatorFunctionType               do_nm;
     //! Implements test particle insertion
-    IntegratorFunctionType              do_tpi;
+    SimulatorFunctionType               do_tpi;
     //! Implements MiMiC QM/MM workflow
-    IntegratorFunctionType              do_mimic;
-    /*! \brief Function to run the correct IntegratorFunctionType,
+    SimulatorFunctionType               do_mimic;
+    /*! \brief Function to run the correct SimulatorFunctionType,
      * based on the .mdp integrator field. */
     void run(unsigned int ei, bool doRerun);
 };
 
 }      // namespace gmx
 
-#endif // GMX_MDRUN_INTEGRATOR_H
+#endif // GMX_MDRUN_SIMULATOR_H

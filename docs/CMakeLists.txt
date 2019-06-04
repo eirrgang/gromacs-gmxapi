@@ -60,7 +60,17 @@ set(EXPECTED_DOXYGEN_VERSION 1.8.5)
 
 set(EXPECTED_SPHINX_VERSION 1.6.1)
 
-find_package(Sphinx ${EXPECTED_SPHINX_VERSION} QUIET COMPONENTS pygments)
+if(NOT DEFINED Sphinx_FIND_QUIETLY)
+    if(NOT DEFINED _gmx_sphinx_checked)
+        set(_gmx_sphinx_checked TRUE
+            CACHE BOOL
+            "Suppresses output after first configuration."
+            FORCE)
+    else()
+        set(Sphinx_FIND_QUIETLY ON)
+    endif()
+endif()
+find_package(Sphinx ${EXPECTED_SPHINX_VERSION} COMPONENTS pygments)
 
 # Even if we aren't going to make the full webpage, set up to put all
 # the documentation output in the same place, for convenience
