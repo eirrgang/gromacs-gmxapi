@@ -184,7 +184,7 @@ def spc_water_box(gmxcli):
     mdp_input = '\n'.join([' = '.join([str(item) for item in kvpair]) for kvpair in mdp_input])
     mdpfile = os.path.join(tempdir, 'md.mdp')
     with open(mdpfile, 'w') as fh:
-        fh.write('\n'.join(mdp_input))
+        fh.write(mdp_input)
         fh.write('\n')
     tprfile = os.path.join(tempdir, 'topol.tpr')
     # We don't use mdout_mdp, but if we don't specify it to grompp,
