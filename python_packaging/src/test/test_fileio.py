@@ -26,6 +26,7 @@ def test_tprfile_read_old(spc_water_box):
         assert "foo" not in params
 
 
+@pytest.mark.xfail(reason='Temporarily disabled.')
 @pytest.mark.usefixtures('cleandir')
 def test_tprfile_read(spc_water_box):
     tprfile = gmxapi.read_tpr(spc_water_box)

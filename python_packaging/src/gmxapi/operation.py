@@ -55,6 +55,7 @@ __all__ = ['computed_result',
            ]
 
 import abc
+import collections
 import functools
 import importlib.util
 import inspect
@@ -65,10 +66,113 @@ from contextlib import contextmanager
 import gmxapi as gmx
 from gmxapi import logger as root_logger
 from gmxapi.datamodel import *
+from gmxapi import exceptions
 
 # Initialize module-level logger
 logger = root_logger.getChild('operation')
 logger.info('Importing {}'.format(__name__))
+
+
+class ResultDescription:
+    """Describe what will be returned when `result()` is called."""
+
+    def __init__(self, dtype=None, width=1):
+        assert isinstance(dtype, type)
+        assert issubclass(dtype, (str, bool, int, float, dict, NDArray))
+        assert isinstance(width, int)
+        self._dtype = dtype
+        self._width = width
+
+    @property
+    def dtype(self) -> type:
+        """node output type"""
+        return self._dtype
+
+    @property
+    def width(self) -> int:
+        """ensemble width"""
+        return self._width
+
+
+class EnsembleDataSource(object):
+    """A single source of data with ensemble data flow annotations.
+
+    Note that data sources may be Futures.
+    """
+    def __init__(self, source=None, width=1, dtype=None):
+        self.source = source
+        self.width = width
+        self.dtype = dtype
+
+    def node(self, member: int):
+        return self.source[member]
+
+    def reset(self):
+        protocols = ('reset', '_reset')
+        for protocol in protocols:
+            if hasattr(self.source, protocol):
+                getattr(self.source, protocol)()
+
+
+class DataSourceCollection(collections.OrderedDict):
+    """Store and describe input data handles for an operation.
+
+    When created from InputCollectionDescription.bind(), the DataSourceCollection
+    has had default values inserted.
+    """
+
+    def __init__(self, **kwargs):
+        """Initialize from key/value pairs of named data sources.
+
+        Data sources may be any of the basic gmxapi data types, gmxapi Futures
+        of those types, or gmxapi ensemble data bundles of the above.
+
+        Note that the checking and conditioning could be moved to one or more
+        creation functions. In conjunction with an InputCollectionDescription,
+        such creation functions could make decisions about automatically shaping
+        the data flow topology or making conversions of data type or shape.
+        """
+        named_data = []
+        for name, value in kwargs.items():
+            if not isinstance(name, str):
+                raise exceptions.TypeError('Data must be named with str type.')
+            if not isinstance(value, (str, bool, int, float, dict, NDArray, EnsembleDataSource)):
+                if isinstance(value, collections.abc.Iterable):
+                    # Note: Here we assume that iterables are arrays first and ensemble data if necessary.
+                    # Warning: the iterable may contain Future objects.
+                    # TODO: revisit as we sort out data shape and Future protocol.
+                    value = ndarray(value)
+                elif hasattr(value, 'result'):
+                    # A Future object.
+                    pass
+                else:
+                    raise exceptions.ApiError('Cannot process data source {}'.format(value))
+            named_data.append((name, value))
+        super().__init__(named_data)
+
+    def __setitem__(self, key, value) -> None:
+        if not isinstance(key, str):
+            raise exceptions.TypeError('Data must be named with str type.')
+        if not isinstance(value, (str, bool, int, float, dict, NDArray, EnsembleDataSource)):
+            if isinstance(value, collections.abc.Iterable):
+                # Note: Here we assume that iterables are arrays first and ensemble data if necessary.
+                # Warning: the iterable may contain Future objects.
+                # TODO: revisit as we sort out data shape and Future protocol.
+                value = ndarray(value)
+            elif hasattr(value, 'result'):
+                # A Future object.
+                pass
+            else:
+                raise exceptions.ApiError('Cannot process data source {}'.format(value))
+        super().__setitem__(key, value)
+
+    def reset(self):
+        """Reset all sources in the collection."""
+        for source in self.values():
+            if hasattr(source, 'reset'):
+                source.reset()
+            if hasattr(source, '_reset'):
+                source._reset()
 
 
 def computed_result(function):
@@ -773,9 +877,9 @@ class Future(object):
     Currently abstraction is handled through SourceResource subclassing.
     """
 
-    def __init__(self, resource_manager: SourceResource, name: str, description: gmx.datamodel.ResultDescription):
+    def __init__(self, resource_manager: SourceResource, name: str, description: ResultDescription):
         self.name = name
-        if not isinstance(description, gmx.datamodel.ResultDescription):
+        if not isinstance(description, ResultDescription):
             raise exceptions.ValueError('Need description of requested data.')
         self.resource_manager = resource_manager
         self.description = description
@@ -809,7 +913,7 @@ class Future(object):
 
     def __getitem__(self, item):
         """Get a more limited view on the Future."""
-        description = gmx.datamodel.ResultDescription(dtype=self.dtype, width=self.description.width)
+        description = ResultDescription(dtype=self.dtype, width=self.description.width)
         # TODO: Use explicit typing when we have more thorough typing.
         description._dtype = None
         if self.description.width == 1:
@@ -835,7 +939,7 @@ class OutputDescriptor(ProxyDataDescriptor):
         if proxy is None:
             # Access through class attribute of owner class
             return self
-        result_description = gmx.datamodel.ResultDescription(dtype=self._dtype, width=proxy.ensemble_width)
+        result_description = ResultDescription(dtype=self._dtype, width=proxy.ensemble_width)
         return proxy._resource_instance.future(name=self._name, description=result_description)
 
 
@@ -868,10 +972,10 @@ PyFuncInput = collections.namedtuple('Input', ('args', 'kwargs', 'dependencies')
 
 # Encapsulate the description and storage of a data output.
 class OutputData(object):
-    def __init__(self, name: str, description: gmx.datamodel.ResultDescription):
+    def __init__(self, name: str, description: ResultDescription):
         assert name != ''
         self._name = name
-        assert isinstance(description, gmx.datamodel.ResultDescription)
+        assert isinstance(description, ResultDescription)
         self._description = description
         self._done = [False] * self._description.width
         self._data = [None] * self._description.width
@@ -1324,7 +1428,7 @@ class ResourceManager(SourceResource):
                             resources = self._operation.resource_director(input=input, output=output)
                             self._operation(resources)
 
-    def future(self, name: str, description: gmx.datamodel.ResultDescription):
+    def future(self, name: str, description: ResultDescription):
         """Retrieve a Future for a named output.
 
         Provide a description of the expected result to check for compatibility or
@@ -1829,7 +1933,7 @@ def function_wrapper(output: dict = None):
                 datastore = {}
                 for name, dtype in self.output_description().items():
                     assert isinstance(dtype, type)
-                    result_description = gmx.datamodel.ResultDescription(dtype, width=ensemble_width)
+                    result_description = ResultDescription(dtype, width=ensemble_width)
                     datastore[name] = OutputData(name=name, description=result_description)
                 return datastore
 
@@ -2346,7 +2450,7 @@ class SubgraphBuilder(object):
         # that will be moved to a new Subgraph type object.
         for name in self.variables:
             if not isinstance(self.variables[name], Future):
-                self.variables[name] = gmx.make_constant(self.variables[name])
+                self.variables[name] = make_constant(self.variables[name])
 
         # class MySubgraph(Subgraph, variables=variables):
         #     pass
@@ -2390,7 +2494,7 @@ class SubgraphBuilder(object):
         # Long term, this is probably implemented with data descriptors
         # that will be moved to a new Subgraph type object.
         if not isinstance(value, Future):
-            value = gmx.make_constant(value)
+            value = make_constant(value)
         self._staging[key] = value
 
     def __enter__(self):
@@ -2461,7 +2565,7 @@ class SubgraphBuilder(object):
                     self.values[name] = result
                 # Replace the data sources in the futures.
                 for name in self.update_sources:
-                    self.futures[name].resource_manager = gmx.make_constant(self.values[name]).resource_manager
+                    self.futures[name].resource_manager = make_constant(self.values[name]).resource_manager
                 for name in self.update_sources:
                     self.update_sources[name]._reset()
 
@@ -2630,3 +2734,229 @@ def subgraph(variables=None):
     logger.debug('Declare a new subgraph with variables {}'.format(variables))
 
     return SubgraphBuilder(variables)
+
+
+def mdrun(input=None):
+    """MD simulation operation.
+
+    Arguments:
+        input : valid simulation input
+
+    Returns:
+        runnable operation to perform the specified simulation
+
+    The returned object has a `run()` method to launch the simulation.
+    Otherwise, this operation does not yet support the gmxapi data flow model.
+
+    `input` may be a TPR file name.
+
+    Note:
+        New function names will be appearing to handle tasks that are separate
+
+        "simulate" is plausibly a dispatcher or base class for various tasks
+        dispatched by mdrun. Specific work factories are likely "minimize,"
+        "test_particle_insertion," "legacy_simulation" (do_md), or "simulation"
+        composition (which may be leap-frog, vv, and other algorithms)
+    """
+    import gmxapi.workflow as workflow
+    return workflow.from_tpr(input)
+
+
+# # TODO: fix make_operation
+# # read_tpr = make_operation(fileio._SimulationInput, output={'parameters': dict})
+# @function_wrapper(output={'parameters': dict, 'topology': str, 'coordinates': str, 'simulation_state': str})
+# def read_tpr(filename: str = '', output=None):
+#     """Get simulation input sources from a TPR file.
+#
+#     Outputs:
+#         parameters : MDP simulation parameters
+#         coordinates : atom (or CG particle) coordinates (not yet implemented)
+#         simulation_state : simulation internal state (checkpoint data) (not yet implemented)
+#         topology : molecular force field data (not yet implemented)
+#     """
+#     import gmxapi.fileio
+#     sim_input = gmxapi.fileio.read_tpr(filename)
+#     output._internal = sim_input
+#     output.parameters = sim_input.parameters.extract()
+#     output.topology = filename
+#     output.coordinates = filename
+#     output.simulation_state = filename
+
+
+@computed_result
+def join_arrays(*, front: NDArray = (), back: NDArray = ()) -> NDArray:
+    """Operation that consumes two sequences and produces a concatenated single sequence.
+
+    Note that the exact signature of the operation is not determined until this
+    helper is called. Helper functions may dispatch to factories for different
+    operations based on the inputs. In this case, the dtype and shape of the
+    inputs determines dtype and shape of the output. An operation instance must
+    have strongly typed output, but the input must be strongly typed on an
+    object definition so that a Context can make runtime decisions about
+    dispatching work and data before instantiating.
+    # TODO: elaborate and clarify.
+    # TODO: check type and shape.
+    # TODO: figure out a better annotation.
+    """
+    # TODO: (FR4) Returned list should be an NDArray.
+    if isinstance(front, (str, bytes)) or isinstance(back, (str, bytes)):
+        raise exceptions.ValueError('Input must be a pair of lists.')
+    assert isinstance(front, NDArray)
+    assert isinstance(back, NDArray)
+    new_list = list(front._values)
+    new_list.extend(back._values)
+    return new_list
+
+
+Scalar = typing.TypeVar('Scalar')
+
+
+def concatenate_lists(sublists: list = ()):
+    """Combine data sources into a single list.
+
+    A trivial data flow restructuring operation.
+    """
+    if isinstance(sublists, (str, bytes)):
+        raise exceptions.ValueError('Input must be a list of lists.')
+    if len(sublists) == 0:
+        return ndarray([])
+    else:
+        return join_arrays(front=sublists[0], back=concatenate_lists(sublists[1:]))
+
+
+def make_constant(value: Scalar):
+    """Provide a predetermined value at run time.
+
+    This is a trivial operation that provides a (typed) value, primarily for
+    internally use to manage gmxapi data flow.
+
+    Accepts a value of any type. The object returned has a definite type and
+    provides same interface as other gmxapi outputs. Additional constraints or
+    guarantees on data type may appear in future versions.
+    """
+    dtype = type(value)
+    source = StaticSourceManager(name='data', proxied_data=value, width=1, function=lambda x: x)
+    description = ResultDescription(dtype=dtype, width=1)
+    future = Future(source, 'data', description=description)
+    return future
+
+
+def scatter(array: NDArray) -> EnsembleDataSource:
+    """Convert array data to parallel data.
+
+    Given data with shape (M,N), produce M parallel data sources of shape (N,).
+
+    The intention is to produce ensemble data flows from NDArray sources.
+    Currently, we only support zero and one dimensional data edge cross-sections.
+    In the future, it may be clearer if `scatter()` always converts a non-ensemble
+    dimension to an ensemble dimension or creates an error, but right now there
+    are cases where it is best just to raise a warning.
+
+    If provided data is a string, mapping, or scalar, there is no dimension to
+    scatter from, and DataShapeError is raised.
+    """
+    if isinstance(array, Future):
+        # scatter if possible
+        width = array.description.width
+        if width > 1:
+            return EnsembleDataSource(source=array, width=width)
+            # Recipient will need to call `result()`.
+        else:
+            raise exceptions.ValueError('No dimension to scatter from.')
+    if isinstance(array, EnsembleDataSource):
+        # scatter if possible
+        if array.width > 1:
+            raise exceptions.DataShapeError('Cannot scatter. Only 1-D ensemble data is supported.')
+        array = array.source
+        if isinstance(array, Future):
+            return scatter(array)
+        elif isinstance(array, NDArray):
+            # Get the first meaningful scattering dimension
+            width = 0
+            source = array[:]
+            for scatter_dimension, width in enumerate(array.shape):
+                if width > 1:
+                    break
+                else:
+                    # Strip unused outer dimensions.
+                    source = source[0]
+            if width > 1:
+                return EnsembleDataSource(source=source, width=width)
+            else:
+                raise exceptions.ValueError('No dimension to scatter from.')
+    if isinstance(array, (str, bytes)):
+        raise exceptions.DataShapeError(
+            'Strings are not treated as sequences of characters to automatically scatter from.')
+    if isinstance(array, collections.abc.Iterable):
+        # scatter
+        array = ndarray(array)
+        return scatter(array)
+
+
+def gather(data: EnsembleDataSource):
+    """Combines parallel data to an NDArray source.
+
+    If the data source has an ensemble shape of (1,), result is an NDArray of
+    length 1 if for a scalar data source. For a NDArray data source, the
+    dimensionality of the NDArray is not increased, the original NDArray is
+    produced, and gather() is a no-op.
+
+    This may change in future versions so that gather always converts an
+    ensemble dimension to an array dimension.
+    """
+    # TODO: Could be used as part of the clean up for join_arrays to convert a scalar Future to a 1-D list.
+    # Note: Clearly, the implementation of gather() is an implementation detail of the execution Context.
+    if hasattr(data, 'width'):
+        if data.width == 1:
+            # TODO: Do we want to allow this silent no-op?
+            if isinstance(data.source, NDArray):
+                return data.source
+            elif isinstance(data.source, Future):
+                raise exceptions.ApiError('gather() not implemented for Future')
+            else:
+                raise exceptions.UsageError('Nothing to gather.')
+
+        assert data.width > 1
+        if isinstance(data.source, Future):
+            manager = ProxyResourceManager(proxied_future=data.source, width=1, function=ndarray)
+        else:
+            if isinstance(data.source, NDArray):
+                raise exceptions.ValueError('higher-dimensional NDArrays not yet implemented.')
+            manager = StaticSourceManager(proxied_data=data.source, width=1, function=ndarray)
+        description = ResultDescription(dtype=NDArray, width=1)
+        future = Future(resource_manager=manager, name=data.source.name, description=description)
+        return future
+    else:
+        raise exceptions.TypeError('Expected data with "width".')
+
+
+def logical_not(value: bool):
+    """Boolean negation.
+
+    If the argument is a gmxapi compatible Data or Future object, a new View or
+    Future is created that proxies the boolean opposite of the input.
+
+    If the argument is a callable, logical_not returns a wrapper function that
+    returns a Future for the logical opposite of the callable's result.
+    """
+    # TODO: Small data transformations like this don't need to be formal Operations.
+    # This could be essentially a data annotation that affects the resolver in a
+    # DataEdge. As an API detail, coding for different Contexts and optimizations
+    # within those Context implementations could be simplified.
+    operation = function_wrapper(output={'data': bool})(lambda data=bool(): not bool(data))
+    return operation(data=value).output.data
+
+
+def File(suffix=''):
+    """Placeholder for input/output files.
+
+    Arguments:
+        suffix: string to be appended to actual file name.
+
+    Note:
+        Some programs have logic influenced by aspects of the text in a file
+        argument. The ``suffix`` key word parameter allows the proxied file's
+        actual name to be constrained when passed as an argument to a program
+        expecting a particular suffix.
+    """
+    assert not gmx.version.has_feature('fr21')

@@ -66,7 +66,7 @@ but should otherwise be left abstract until data connections are made. This is a
 special case of a string Future when we are dealing with files by name only.
 """
 
-# __all__ = ['ndarray']
+__all__ = ['ndarray', 'NDArray']
 
 import collections
 
@@ -290,108 +290,6 @@ class NDArray(collections.abc.Sequence):
 #     @property
 #     def gmxapi_datatype(self):
 #         return self._dtype
-
-
-class ResultDescription:
-    """Describe what will be returned when `result()` is called."""
-
-    def __init__(self, dtype=None, width=1):
-        assert isinstance(dtype, type)
-        assert issubclass(dtype, (str, bool, int, float, dict, NDArray))
-        assert isinstance(width, int)
-        self._dtype = dtype
-        self._width = width
-
-    @property
-    def dtype(self) -> type:
-        """node output type"""
-        return self._dtype
-
-    @property
-    def width(self) -> int:
-        """ensemble width"""
-        return self._width
-
-
-class EnsembleDataSource(object):
-    """A single source of data with ensemble data flow annotations.
-
-    Note that data sources may be Futures.
-    """
-    def __init__(self, source=None, width=1, dtype=None):
-        self.source = source
-        self.width = width
-        self.dtype = dtype
-
-    def node(self, member: int):
-        return self.source[member]
-
-    def reset(self):
-        protocols = ('reset', '_reset')
-        for protocol in protocols:
-            if hasattr(self.source, protocol):
-                getattr(self.source, protocol)()
-
-
-class DataSourceCollection(collections.OrderedDict):
-    """Store and describe input data handles for an operation.
-
-    When created from InputCollectionDescription.bind(), the DataSourceCollection
-    has had default values inserted.
-    """
-
-    def __init__(self, **kwargs):
-        """Initialize from key/value pairs of named data sources.
-
-        Data sources may be any of the basic gmxapi data types, gmxapi Futures
-        of those types, or gmxapi ensemble data bundles of the above.
-
-        Note that the checking and conditioning could be moved to one or more
-        creation functions. In conjunction with an InputCollectionDescription,
-        such creation functions could make decisions about automatically shaping
-        the data flow topology or making conversions of data type or shape.
-        """
-        named_data = []
-        for name, value in kwargs.items():
-            if not isinstance(name, str):
-                raise exceptions.TypeError('Data must be named with str type.')
-            if not isinstance(value, (str, bool, int, float, dict, NDArray, EnsembleDataSource)):
-                if isinstance(value, collections.abc.Iterable):
-                    # Note: Here we assume that iterables are arrays first and ensemble data if necessary.
-                    # Warning: the iterable may contain Future objects.
-                    # TODO: revisit as we sort out data shape and Future protocol.
-                    value = ndarray(value)
-                elif hasattr(value, 'result'):
-                    # A Future object.
-                    pass
-                else:
-                    raise exceptions.ApiError('Cannot process data source {}'.format(value))
-            named_data.append((name, value))
-        super().__init__(named_data)
-
-    def __setitem__(self, key, value) -> None:
-        if not isinstance(key, str):
-            raise exceptions.TypeError('Data must be named with str type.')
-        if not isinstance(value, (str, bool, int, float, dict, NDArray, EnsembleDataSource)):
-            if isinstance(value, collections.abc.Iterable):
-                # Note: Here we assume that iterables are arrays first and ensemble data if necessary.
-                # Warning: the iterable may contain Future objects.
-                # TODO: revisit as we sort out data shape and Future protocol.
-                value = ndarray(value)
-            elif hasattr(value, 'result'):
-                # A Future object.
-                pass
-            else:
-                raise exceptions.ApiError('Cannot process data source {}'.format(value))
-        super().__setitem__(key, value)
-
-    def reset(self):
-        """Reset all sources in the collection."""
-        for source in self.values():
-            if hasattr(source, 'reset'):
-                source.reset()
-            if hasattr(source, '_reset'):
-                source._reset()
 
 
 def ndarray(data=None):
