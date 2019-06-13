@@ -74,6 +74,18 @@ class DataShapeError(Error):
     """
 
 
+class NotImplementedError(Error):
+    """Specified feature is not implemented in the current code.
+
+    This exception indicates that the implemented code does not support the
+    API as specified. The calling code has used valid syntax, as documented for
+    the API, but has reached incompletely implemented code, which should be
+    considered a bug.
+    """
+    # May be useful for error checking in base classes or as a development tool
+    # to avoid releasing incomplete implementations (e.g. overlooked "To do"s)
+
+
 class ProtocolError(Error):
     """Unexpected API behavior or protocol violation.
 
