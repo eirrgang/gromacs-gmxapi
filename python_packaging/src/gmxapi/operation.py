@@ -328,10 +328,10 @@ class InputCollectionDescription(collections.OrderedDict):
     graph Edge for subsequent execution.
     """
 
-    def __init__(self, **parameters):
+    def __init__(self, parameters: typing.Iterable[typing.Tuple[str, inspect.Parameter]]):
         """Create the input description for an operation node from a dictionary of names and types."""
         inputs = []
-        for name, param in parameters.items():
+        for name, param in parameters:
             if not isinstance(name, str):
                 raise exceptions.TypeError('Input descriptions are keyed by Python strings.')
             # Multidimensional inputs are explicitly NDArray
@@ -342,7 +342,7 @@ class InputCollectionDescription(collections.OrderedDict):
                 if dtype != datamodel.NDArray:
                     raise exceptions.UsageError(
                         'Cannot accept input type {}. Sequence type inputs must use NDArray.'.format(param))
-            assert issubclass(dtype, (str, bool, int, float, dict, datamodel.NDArray))
+            assert issubclass(dtype, valid_result_types)
             if hasattr(param, 'kind'):
                 disallowed = any([param.kind == param.POSITIONAL_ONLY,
                                   param.kind == param.VAR_POSITIONAL,
@@ -403,7 +403,7 @@ class InputCollectionDescription(collections.OrderedDict):
             else:
                 dtype = param.annotation
             description[param.name] = param.replace(annotation=dtype)
-        return InputCollectionDescription(**description)
+        return InputCollectionDescription(description.items())
 
     def bind(self, *args, **kwargs) -> DataSourceCollection:
         """Create a compatible DataSourceCollection from provided arguments.
@@ -2513,6 +2513,7 @@ class SubgraphBuilder(object):
         if not isinstance(value, Future):
             value = gmx.make_constant(value)
         self._staging[key] = value
+        self._staging.move_to_end(key)
 
     def __enter__(self):
         """Enter a Context managed by the subgraph to capture operation additions.

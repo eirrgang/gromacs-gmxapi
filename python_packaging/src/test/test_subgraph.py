@@ -76,7 +76,9 @@ def test_subgraph_function():
     assert handle.output.float_with_default.result() == 6
 
 
-def test_assumptions():
+def test_local_tools_and_assumptions():
     const = gmx.make_constant(1.)
     assert add_float(const, const).output.data.result() == 2
-    # Test that subgraph variable accumulates results from iterations.
+    assert gmx.logical_not(less_than(const, const).output.data).result()
+    # Note: It may not be safe to assume that keyword argument order (lhs, rhs) is preserved.
+    assert less_than(const, add_float(const, const).output.data).output.data.result()
