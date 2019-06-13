@@ -66,18 +66,19 @@ class ApiError(Error):
     """An API operation was attempted with an incompatible object."""
 
 
+class DataShapeError(Error):
+    """An object has an incompatible shape.
+
+    This exception does not imply that the Type or any other aspect of the data
+    has been checked.
+    """
+
+
 class ProtocolError(Error):
     """Unexpected API behavior or protocol violation.
 
     This exception generally indicates a gmxapi bug, since it should only
     occur through incorrect assumptions or misuse of API implementation internals.
-    """
-
-
-class UsageError(Error):
-    """Unsupported syntax or call signatures.
-
-    Generic usage error for gmxapi module.
     """
 
 
@@ -88,13 +89,12 @@ class TypeError(Error):
     """
 
 
+class UsageError(Error):
+    """Unsupported syntax or call signatures.
+
+    Generic usage error for gmxapi module.
+    """
+
+
 class ValueError(Error):
     """A user-provided value cannot be interpreted or doesn't make sense."""
-
-
-class DataShapeError(Error):
-    """An object has an incompatible shape.
-
-    This exception does not imply that the Type or any other aspect of the data
-    has been checked.
-    """
