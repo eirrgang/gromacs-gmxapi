@@ -94,26 +94,31 @@ Proxies
 __all__ = ['commandline_operation',
            'concatenate_lists',
            'function_wrapper',
+           'gather',
            'join_arrays',
            'logger',
+           'logical_not',
            'make_constant',
            'make_operation',
            'mdrun',
            'ndarray',
+           'scatter',
+           'subgraph',
+           'while_loop',
            '__version__']
 
-import collections
-import typing
-
 from ._logging import logger
+from .version import __version__
 
-from .datamodel import ndarray, NDArray
-from .fileio import read_tpr, write_tpr_file
-from .operation import InputCollectionDescription
-from .operation import concatenate_lists, computed_result, function_wrapper, join_arrays, make_constant, make_operation, mdrun
+# Import utilities
+from .operation import computed_result, function_wrapper, make_operation
+# Import public types
+from .datamodel import NDArray
+# Import the public operations
+from .datamodel import ndarray
+from .operation import concatenate_lists, gather, join_arrays, logical_not, make_constant, mdrun, scatter
 from .commandline import commandline_operation
 # TODO: decide where this lives
 from .operation import subgraph
 # TODO: decide where this lives
 from .operation import while_loop
-from .version import __version__

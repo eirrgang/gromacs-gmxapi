@@ -72,6 +72,7 @@ import collections
 
 from gmxapi import exceptions
 
+
 # class GmxapiDataType(Enum):
 #     Boolean = auto()
 #     String = auto()
@@ -178,13 +179,16 @@ class NDArray(collections.abc.Sequence):
     TODO: Provide __class_getitem__ for subscripted type specification?
     TODO: Provide gmxapi Any type for TypeVar type placeholders? (ref typing module)
     """
+
     def __init__(self, data=None):
         self._values = []
         self.dtype = None
         self.shape = ()
         if data is not None:
-            if hasattr(data, 'result') or (isinstance(data, collections.abc.Iterable) and any([hasattr(item, 'result') for item in data])):
-                raise exceptions.ValueError('Make a Future of type NDArray instead of NDArray of type Future, or call result() first.')
+            if hasattr(data, 'result') or (
+                    isinstance(data, collections.abc.Iterable) and any([hasattr(item, 'result') for item in data])):
+                raise exceptions.ValueError(
+                    'Make a Future of type NDArray instead of NDArray of type Future, or call result() first.')
             if isinstance(data, (str, bytes)):
                 data = [data]
                 length = 1
@@ -324,7 +328,7 @@ def ndarray(data=None):
     if hasattr(data, 'result'):
         # TODO: reinstate this check when we have a way to convert Futures of Scalar (or unknown) type
         #  into Futures of NDArray type.
-        #raise exceptions.ValueError('Cannot construct an NDArray from a Future object.')
+        # raise exceptions.ValueError('Cannot construct an NDArray from a Future object.')
         pass
     if data is None:
         # if shape is None or dtype is None:

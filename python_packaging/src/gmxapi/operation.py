@@ -64,9 +64,9 @@ import weakref
 from contextlib import contextmanager
 
 import gmxapi as gmx
-from gmxapi import logger as root_logger
-from gmxapi.datamodel import *
+from gmxapi import datamodel
 from gmxapi import exceptions
+from gmxapi import logger as root_logger
 
 # Initialize module-level logger
 logger = root_logger.getChild('operation')
@@ -78,7 +78,7 @@ class ResultDescription:
 
     def __init__(self, dtype=None, width=1):
         assert isinstance(dtype, type)
-        assert issubclass(dtype, (str, bool, int, float, dict, NDArray))
+        assert issubclass(dtype, valid_result_types)
         assert isinstance(width, int)
         self._dtype = dtype
         self._width = width
@@ -92,6 +92,56 @@ class ResultDescription:
     def width(self) -> int:
         """ensemble width"""
         return self._width
+
+
+class OutputData(object):
+    """Encapsulate the description and storage of a data output."""
+    def __init__(self, name: str, description: ResultDescription):
+        assert name != ''
+        self._name = name
+        assert isinstance(description, ResultDescription)
+        self._description = description
+        self._done = [False] * self._description.width
+        self._data = [None] * self._description.width
+
+    @property
+    def name(self):
+        return self._name
+
+    # TODO: Change to regular member function and add ensemble member arg.
+    @property
+    def done(self):
+        return all(self._done)
+
+    # TODO: Change to regular member function and add ensemble member arg.
+    @property
+    def data(self):
+        if not self.done:
+            raise exceptions.ApiError('Attempt to read before data has been published.')
+        if self._data is None or None in self._data:
+            raise exceptions.ApiError('Data marked "done" but contains null value.')
+        # For intuitive use in non-ensemble cases, we represent data as bare scalars
+        # when possible. It is easy to cast scalars to lists of length 1. In the future,
+        # we may distinguish between data of shape () and shape (1,), but we will need
+        # to be careful with semantics. We are already starting to adopt a rule-of-thumb
+        # that data objects assume the minimum dimensionality necessary unless told
+        # otherwise, and we could make that a hard rule if it doesn't make other things
+        # too difficult.
+        if self._description.width == 1:
+            return self._data[0]
+        else:
+            return self._data
+
+    def set(self, value, member: int):
+        if self._description.dtype == datamodel.NDArray:
+            self._data[member] = datamodel.ndarray(value)
+        else:
+            self._data[member] = self._description.dtype(value)
+        self._done[member] = True
+
+    def reset(self):
+        self._done = [False] * self._description.width
+        self._data = [None] * self._description.width
 
 
 class EnsembleDataSource(object):
@@ -112,6 +162,14 @@ class EnsembleDataSource(object):
         for protocol in protocols:
             if hasattr(self.source, protocol):
                 getattr(self.source, protocol)()
+
+
+ResultTypeVar = typing.TypeVar('ResultTypeVar', *(str, bool, int, float, dict, datamodel.NDArray))
+valid_result_types = ResultTypeVar.__constraints__
+
+SourceTypeVar = typing.TypeVar('SourceTypeVar',
+                               *(str, bool, int, float, dict, datamodel.NDArray, EnsembleDataSource))
+valid_source_types = SourceTypeVar.__constraints__
 
 
 class DataSourceCollection(collections.OrderedDict):
@@ -136,12 +194,12 @@ class DataSourceCollection(collections.OrderedDict):
         for name, value in kwargs.items():
             if not isinstance(name, str):
                 raise exceptions.TypeError('Data must be named with str type.')
-            if not isinstance(value, (str, bool, int, float, dict, NDArray, EnsembleDataSource)):
+            if not isinstance(value, valid_source_types):
                 if isinstance(value, collections.abc.Iterable):
                     # Note: Here we assume that iterables are arrays first and ensemble data if necessary.
                     # Warning: the iterable may contain Future objects.
                     # TODO: revisit as we sort out data shape and Future protocol.
-                    value = ndarray(value)
+                    value = datamodel.ndarray(value)
                 elif hasattr(value, 'result'):
                     # A Future object.
                     pass
@@ -150,15 +208,15 @@ class DataSourceCollection(collections.OrderedDict):
             named_data.append((name, value))
         super().__init__(named_data)
 
-    def __setitem__(self, key, value) -> None:
+    def __setitem__(self, key: str, value: SourceTypeVar) -> None:
         if not isinstance(key, str):
             raise exceptions.TypeError('Data must be named with str type.')
-        if not isinstance(value, (str, bool, int, float, dict, NDArray, EnsembleDataSource)):
+        if not isinstance(value, valid_source_types):
             if isinstance(value, collections.abc.Iterable):
                 # Note: Here we assume that iterables are arrays first and ensemble data if necessary.
                 # Warning: the iterable may contain Future objects.
                 # TODO: revisit as we sort out data shape and Future protocol.
-                value = ndarray(value)
+                value = datamodel.ndarray(value)
             elif hasattr(value, 'result'):
                 # A Future object.
                 pass
@@ -241,8 +299,8 @@ class OutputCollectionDescription(collections.OrderedDict):
                 raise exceptions.TypeError('Output descriptions are keyed by Python strings.')
             # Multidimensional outputs are explicitly NDArray
             if issubclass(flavor, (list, tuple)):
-                flavor = NDArray
-            assert issubclass(flavor, (str, bool, int, float, dict, NDArray))
+                flavor = datamodel.NDArray
+            assert issubclass(flavor, valid_result_types)
             outputs.append((name, flavor))
         super().__init__(outputs)
 
@@ -281,10 +339,10 @@ class InputCollectionDescription(collections.OrderedDict):
             if issubclass(dtype, collections.abc.Iterable) \
                     and not issubclass(dtype, (str, bytes, collections.abc.Mapping)):
                 # TODO: we can relax this with some more input conditioning.
-                if dtype != NDArray:
+                if dtype != datamodel.NDArray:
                     raise exceptions.UsageError(
                         'Cannot accept input type {}. Sequence type inputs must use NDArray.'.format(param))
-            assert issubclass(dtype, (str, bool, int, float, dict, NDArray))
+            assert issubclass(dtype, (str, bool, int, float, dict, datamodel.NDArray))
             if hasattr(param, 'kind'):
                 disallowed = any([param.kind == param.POSITIONAL_ONLY,
                                   param.kind == param.VAR_POSITIONAL,
@@ -341,7 +399,7 @@ class InputCollectionDescription(collections.OrderedDict):
                 dtype = type(param.default)
                 if isinstance(dtype, collections.abc.Iterable) \
                         and not isinstance(dtype, (str, bytes, collections.abc.Mapping)):
-                    dtype = NDArray
+                    dtype = datamodel.NDArray
             else:
                 dtype = param.annotation
             description[param.name] = param.replace(annotation=dtype)
@@ -407,11 +465,11 @@ class ProxyDataDescriptor(object):
     __init__ explicitly: super().__init__(self, name, dtype)
     """
 
-    def __init__(self, name: str, dtype=None):
+    def __init__(self, name: str, dtype: ResultTypeVar = None):
         self._name = name
         if dtype is not None:
             assert isinstance(dtype, type)
-            assert issubclass(dtype, (str, bool, int, float, dict, NDArray))
+            assert issubclass(dtype, valid_result_types)
         self._dtype = dtype
 
 
@@ -652,8 +710,8 @@ class StaticSourceManager(SourceResource):
                 raise exceptions.ValueError('width must be an integer 1 or greater.')
             dtype = type(self._result)
             if issubclass(dtype, (list, tuple)):
-                dtype = NDArray
-                data = [ndarray(self._result)]
+                dtype = datamodel.NDArray
+                data = [datamodel.ndarray(self._result)]
             elif isinstance(self._result, collections.abc.Iterable):
                 if not isinstance(self._result, (str, bytes)):
                     raise exceptions.ValueError(
@@ -777,6 +835,8 @@ class OperationDetailsBase(abc.ABC):
 
     Provides necessary interface for gmxapi.operation.ResourceManager
     """
+    # get a symbol we can use to annotate input and output types more specifically.
+    Resources = typing.TypeVar('Resources')
 
     @classmethod
     @abc.abstractmethod
@@ -796,11 +856,17 @@ class OperationDetailsBase(abc.ABC):
         ...
 
     @abc.abstractmethod
-    def make_datastore(self, ensemble_width: int) -> typing.Mapping:
+    def make_datastore(self, ensemble_width: int) -> typing.Mapping[str, OutputData]:
+        """Create a container to hold the resources for this operation node.
+
+        Used internally by the resource manager when setting up the node.
+        Evolution of the C++ framework for creating the Operation SessionResources
+        object will inform the future of this and the resource_director method.
+        """
         ...
 
     @abc.abstractmethod
-    def __call__(self, resources):
+    def __call__(self, resources: Resources):
         """Execute the operation with provided resources.
 
         Resources are prepared in an execution context with aid of resource_director()
@@ -809,7 +875,7 @@ class OperationDetailsBase(abc.ABC):
 
     @classmethod
     @abc.abstractmethod
-    def make_uid(cls, input) -> str:
+    def make_uid(cls, input: 'DataEdge') -> str:
         """The unique identity of an operation node tags the output with respect to the input.
 
         TODO: We probably don't want to allow Operations to single-handedly determine their
@@ -821,7 +887,7 @@ class OperationDetailsBase(abc.ABC):
 
     @classmethod
     @abc.abstractmethod
-    def resource_director(cls, *, input, output) -> typing.Mapping:
+    def resource_director(cls, *, input, output) -> Resources:
         """a Director factory that helps build the Session Resources for the function.
 
         The Session launcher provides the director with all of the resources previously
@@ -970,56 +1036,6 @@ def define_output_data_proxy(output_description: OutputCollectionDescription) ->
 PyFuncInput = collections.namedtuple('Input', ('args', 'kwargs', 'dependencies'))
 
 
-# Encapsulate the description and storage of a data output.
-class OutputData(object):
-    def __init__(self, name: str, description: ResultDescription):
-        assert name != ''
-        self._name = name
-        assert isinstance(description, ResultDescription)
-        self._description = description
-        self._done = [False] * self._description.width
-        self._data = [None] * self._description.width
-
-    @property
-    def name(self):
-        return self._name
-
-    # TODO: Change to regular member function and add ensemble member arg.
-    @property
-    def done(self):
-        return all(self._done)
-
-    # TODO: Change to regular member function and add ensemble member arg.
-    @property
-    def data(self):
-        if not self.done:
-            raise exceptions.ApiError('Attempt to read before data has been published.')
-        if self._data is None or None in self._data:
-            raise exceptions.ApiError('Data marked "done" but contains null value.')
-        # For intuitive use in non-ensemble cases, we represent data as bare scalars
-        # when possible. It is easy to cast scalars to lists of length 1. In the future,
-        # we may distinguish between data of shape () and shape (1,), but we will need
-        # to be careful with semantics. We are already starting to adopt a rule-of-thumb
-        # that data objects assume the minimum dimensionality necessary unless told
-        # otherwise, and we could make that a hard rule if it doesn't make other things
-        # too difficult.
-        if self._description.width == 1:
-            return self._data[0]
-        else:
-            return self._data
-
-    def set(self, value, member: int):
-        if self._description.dtype == NDArray:
-            self._data[member] = gmx.datamodel.ndarray(value)
-        else:
-            self._data[member] = self._description.dtype(value)
-        self._done[member] = True
-
-    def reset(self):
-        self._done = [False] * self._description.width
-        self._data = [None] * self._description.width
-
-
 class SinkTerminal(object):
     """Operation input end of a data edge.
 
@@ -1072,15 +1088,15 @@ class SinkTerminal(object):
             else:
                 # With a single data source, we need data to be in the source or have a default
                 assert name in data_source_collection
-                assert issubclass(sink_dtype, (str, bool, int, float, dict, NDArray))
+                assert issubclass(sink_dtype, valid_result_types)
                 source = data_source_collection[name]
                 if isinstance(source, sink_dtype):
                     continue
                 else:
                     if isinstance(source, collections.abc.Iterable) and not isinstance(source, (
                             str, bytes, collections.abc.Mapping)):
-                        assert isinstance(source, NDArray)
-                        if sink_dtype != NDArray:
+                        assert isinstance(source, datamodel.NDArray)
+                        if sink_dtype != datamodel.NDArray:
                             # Implicit scatter
                             self.update_width(len(source))
 
@@ -1152,10 +1168,10 @@ class DataEdge(object):
                     if issubclass(sink, (str, bool, int, float, dict)):
                         self.adapters[name] = self.ConstantResolver(source)
                     else:
-                        assert issubclass(sink, NDArray)
-                        self.adapters[name] = self.ConstantResolver(ndarray([source]))
-                elif isinstance(source, NDArray):
-                    if issubclass(sink, NDArray):
+                        assert issubclass(sink, datamodel.NDArray)
+                        self.adapters[name] = self.ConstantResolver(datamodel.ndarray([source]))
+                elif isinstance(source, datamodel.NDArray):
+                    if issubclass(sink, datamodel.NDArray):
                         # TODO: shape checking
                         # Implicit broadcast may not be what is intended
                         self.adapters[name] = self.ConstantResolver(source)
@@ -1476,7 +1492,7 @@ class ResourceManager(SourceResource):
             value_list = []
             if isinstance(value, list):
                 value_list = value
-            if isinstance(value, NDArray):
+            if isinstance(value, datamodel.NDArray):
                 value_list = value._values
             if isinstance(value, collections.abc.Mapping):
                 value_list = value.values()
@@ -1745,7 +1761,7 @@ class ModuleNodeBuilder(NodeBuilder):
 
     def add_operation_details(self, operation: typing.Type['OperationDetailsBase']):
         # TODO: This can be decomposed into the appropriate set of factory functions as they become clear.
-        assert hasattr(operation, '_input_signature_description')
+        assert hasattr(operation, 'signature')
         assert hasattr(operation, 'make_uid')
         self.operation_details = operation
 
@@ -1761,7 +1777,8 @@ class ModuleNodeBuilder(NodeBuilder):
         if self.operation_details is None:
             raise exceptions.UsageError('Missing details needed for operation node.')
 
-        input_sink = SinkTerminal(self.operation_details._input_signature_description)
+        assert issubclass(self.operation_details, OperationDetailsBase)
+        input_sink = SinkTerminal(self.operation_details.signature())
         input_sink.update(self.sources)
         edge = DataEdge(self.sources, input_sink)
         # TODO: Fingerprinting: Each operation instance has unique output based on the unique input.
@@ -1952,7 +1969,7 @@ def function_wrapper(output: dict = None):
                 assert isinstance(instance, ResourceManager)
                 return self._output_data_proxy_type(instance=instance)
 
-            def __call__(self, resources):
+            def __call__(self, resources: PyFunctionRunnerResources):
                 self._runner(resources)
 
             @classmethod
@@ -1972,7 +1989,7 @@ def function_wrapper(output: dict = None):
                 return uid
 
             @classmethod
-            def resource_director(cls, *, input=None, output=None):
+            def resource_director(cls, *, input=None, output=None) -> PyFunctionRunnerResources:
                 """a Director factory that helps build the Session Resources for the function.
 
                 The Session launcher provides the director with all of the resources previously
@@ -1989,7 +2006,7 @@ def function_wrapper(output: dict = None):
                 # TODO: Remove this hack when we can better handle Futures of Containers and Future slicing.
                 for name in resources:
                     if isinstance(resources[name], (list, tuple)):
-                        resources[name] = ndarray(resources[name])
+                        resources[name] = datamodel.ndarray(resources[name])
 
                 # Check data compatibility
                 for name, value in resources.items():
@@ -2450,7 +2467,7 @@ class SubgraphBuilder(object):
         # that will be moved to a new Subgraph type object.
         for name in self.variables:
             if not isinstance(self.variables[name], Future):
-                self.variables[name] = make_constant(self.variables[name])
+                self.variables[name] = gmx.make_constant(self.variables[name])
 
         # class MySubgraph(Subgraph, variables=variables):
         #     pass
@@ -2494,7 +2511,7 @@ class SubgraphBuilder(object):
         # Long term, this is probably implemented with data descriptors
         # that will be moved to a new Subgraph type object.
         if not isinstance(value, Future):
-            value = make_constant(value)
+            value = gmx.make_constant(value)
         self._staging[key] = value
 
     def __enter__(self):
@@ -2565,7 +2582,7 @@ class SubgraphBuilder(object):
                     self.values[name] = result
                 # Replace the data sources in the futures.
                 for name in self.update_sources:
-                    self.futures[name].resource_manager = make_constant(self.values[name]).resource_manager
+                    self.futures[name].resource_manager = gmx.make_constant(self.values[name]).resource_manager
                 for name in self.update_sources:
                     self.update_sources[name]._reset()
 
@@ -2784,7 +2801,7 @@ def mdrun(input=None):
 
 
 @computed_result
-def join_arrays(*, front: NDArray = (), back: NDArray = ()) -> NDArray:
+def join_arrays(*, front: datamodel.NDArray = (), back: datamodel.NDArray = ()) -> datamodel.NDArray:
     """Operation that consumes two sequences and produces a concatenated single sequence.
 
     Note that the exact signature of the operation is not determined until this
@@ -2801,8 +2818,8 @@ def join_arrays(*, front: NDArray = (), back: NDArray = ()) -> NDArray:
     # TODO: (FR4) Returned list should be an NDArray.
     if isinstance(front, (str, bytes)) or isinstance(back, (str, bytes)):
         raise exceptions.ValueError('Input must be a pair of lists.')
-    assert isinstance(front, NDArray)
-    assert isinstance(back, NDArray)
+    assert isinstance(front, datamodel.NDArray)
+    assert isinstance(back, datamodel.NDArray)
     new_list = list(front._values)
     new_list.extend(back._values)
     return new_list
@@ -2819,7 +2836,7 @@ def concatenate_lists(sublists: list = ()):
     if isinstance(sublists, (str, bytes)):
         raise exceptions.ValueError('Input must be a list of lists.')
     if len(sublists) == 0:
-        return ndarray([])
+        return datamodel.ndarray([])
     else:
         return join_arrays(front=sublists[0], back=concatenate_lists(sublists[1:]))
 
@@ -2841,7 +2858,7 @@ def make_constant(value: Scalar):
     return future
 
 
-def scatter(array: NDArray) -> EnsembleDataSource:
+def scatter(array: datamodel.NDArray) -> EnsembleDataSource:
     """Convert array data to parallel data.
 
     Given data with shape (M,N), produce M parallel data sources of shape (N,).
@@ -2870,7 +2887,7 @@ def scatter(array: NDArray) -> EnsembleDataSource:
         array = array.source
         if isinstance(array, Future):
             return scatter(array)
-        elif isinstance(array, NDArray):
+        elif isinstance(array, datamodel.NDArray):
             # Get the first meaningful scattering dimension
             width = 0
             source = array[:]
@@ -2889,7 +2906,7 @@ def scatter(array: NDArray) -> EnsembleDataSource:
             'Strings are not treated as sequences of characters to automatically scatter from.')
     if isinstance(array, collections.abc.Iterable):
         # scatter
-        array = ndarray(array)
+        array = datamodel.ndarray(array)
         return scatter(array)
 
 
@@ -2909,7 +2926,7 @@ def gather(data: EnsembleDataSource):
     if hasattr(data, 'width'):
         if data.width == 1:
             # TODO: Do we want to allow this silent no-op?
-            if isinstance(data.source, NDArray):
+            if isinstance(data.source, datamodel.NDArray):
                 return data.source
             elif isinstance(data.source, Future):
                 raise exceptions.ApiError('gather() not implemented for Future')
@@ -2918,12 +2935,12 @@ def gather(data: EnsembleDataSource):
 
         assert data.width > 1
         if isinstance(data.source, Future):
-            manager = ProxyResourceManager(proxied_future=data.source, width=1, function=ndarray)
+            manager = ProxyResourceManager(proxied_future=data.source, width=1, function=datamodel.ndarray)
         else:
-            if isinstance(data.source, NDArray):
+            if isinstance(data.source, datamodel.NDArray):
                 raise exceptions.ValueError('higher-dimensional NDArrays not yet implemented.')
-            manager = StaticSourceManager(proxied_data=data.source, width=1, function=ndarray)
-        description = ResultDescription(dtype=NDArray, width=1)
+            manager = StaticSourceManager(proxied_data=data.source, width=1, function=datamodel.ndarray)
+        description = ResultDescription(dtype=datamodel.NDArray, width=1)
         future = Future(resource_manager=manager, name=data.source.name, description=description)
         return future
     else:
