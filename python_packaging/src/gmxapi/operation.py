@@ -504,13 +504,47 @@ class DataProxyMeta(type):
         else:
             return descriptors
 
-    def __new__(cls, name, bases, namespace, **kwargs):
+    def __new__(cls, name, bases: typing.Iterable, namespace, **kwargs):
         for key in kwargs:
             if key not in DataProxyMeta._prepare_keywords:
                 raise exceptions.ApiError('Unexpected class creation keyword: {}'.format(key))
+        # See note about DataProxyBase._reserved.
+        if '_reserved' not in namespace and not any(hasattr(base, '_reserved') for base in bases):
+            raise exceptions.ApiError(
+                'We currently expect DataProxy classes to provide a list of reserved attribute names.')
+        for key in namespace:
+            # Here we can check conformance with naming and typing rules.
+            assert isinstance(key, str)
+            if key.startswith('_'):
+                # Skip non-public attributes.
+                continue
+            descriptor = namespace[key]
+            # The purpose of the current data proxies is to serve as a limited namespace
+            # containing only descriptors of a certain type. In the future, these proxies
+            # may be flattened into a facet of a richer OperationHandle class
+            # (this metaclass may become a decorator on an implementation class),
+            # but for now we check that the class is being used according to the
+            # documented framework. A nearer term update could be to restrict the
+            # type of the data descriptor:
+            # TODO: Use a member type of the derived cls (or a mix-in base) to specify a particular
+            #  ProxyDataDescriptor subclass.
+            # Also, see note about DataProxyBase._reserved
+            if not isinstance(descriptor, ProxyDataDescriptor):
+                if key not in namespace['_reserved'] and not any(key in getattr(base, '_reserved') for base in
+                                                                 bases if hasattr(base, '_reserved')):
+                    raise exceptions.ApiError('Unexpected data proxy attribute {}: {}'.format(key, repr(descriptor)))
+            else:
+                assert isinstance(descriptor, ProxyDataDescriptor)
+                if not isinstance(descriptor._name, str) or descriptor._name == '':
+                    descriptor._name = key
+                else:
+                    if descriptor._name != key:
+                        raise exceptions.ApiError(
+                            'Descriptor internal name {} does not match attribute name {}'.format(
+                                descriptor._name, key))
         return type.__new__(cls, name, bases, namespace)
 
-    # TODO: This is keyword argument stripping is not necessary in more recent Python versions.
+    # TODO: This keyword argument stripping is not necessary in more recent Python versions.
     # When Python minimum required version is increased, check if we can remove this.
     def __init__(cls, name, bases, namespace, **kwargs):
         for key in kwargs:
@@ -549,6 +583,15 @@ class DataProxyBase(object, metaclass=DataProxyMeta):
         assert hasattr(MyDataProxy, 'foo')
 
     """
+    # This class attribute (which subclasses are free to replace to augment) is an
+    # indication of a problem with the current data model. If we are allowing
+    # reserved words that would otherwise be valid data names, there is not a
+    # compelling reason for separate data proxy classes: we throw away the assertion
+    # that we are preparing a clean namespace and we could have accomplished the
+    # class responsibilities in the Operation handle with just descriptor classes.
+    # If we want the clean namespace, we should figure out how to keep this interface
+    # from growing and/or have some "hidden" internal interface.
+    _reserved = ('ensemble_width', 'items')
 
     # This class can be expanded to be the attachment point for a metaclass for
     # data proxies such as PublishingDataProxy or OutputDataProxy, which may be
@@ -556,7 +599,7 @@ class DataProxyBase(object, metaclass=DataProxyMeta):
     # call.
     # If development in this direction does not materialize, then this base
     # class is not very useful and should be removed.
-    def __init__(self, instance: 'ResourceManager', client_id: int = None):
+    def __init__(self, instance: 'SourceResource', client_id: int = None):
         """Get partial ownership of a resource provider.
 
         Arguments:
@@ -1971,7 +2014,7 @@ class OperationDirector(object):
         self.kwargs = kwargs
         self.label = label
 
-    def __call__(self):
+    def __call__(self) -> AbstractOperationHandle:
         cls = self.operation_details
         builder = self.context.node_builder(label=self.label)
         # TODO: Figure out what interface really needs to be passed and enforce it.
