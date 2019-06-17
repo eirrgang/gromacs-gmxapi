@@ -615,8 +615,8 @@ class DataProxyBase(object, metaclass=DataProxyMeta):
         self._client_identifier = client_id
 
     @property
-    def ensemble_width(self):
-        return self._resource_instance.ensemble_width
+    def ensemble_width(self) -> int:
+        return self._resource_instance.width()
 
     @classmethod
     def items(cls):
@@ -728,6 +728,11 @@ class SourceResource(abc.ABC):
         All inputs supporting the interface have ``_reset()`` called on them.
         """
 
+    @abc.abstractmethod
+    def width(self) -> int:
+        """Ensemble width of the managed resources."""
+        ...
+
 
 class StaticSourceManager(SourceResource):
     """Provide the resource manager interface for local static data.
@@ -801,6 +806,11 @@ class StaticSourceManager(SourceResource):
     def data(self) -> DataProxyBase:
         return self.output_data_proxy(self)
 
+    def width(self) -> int:
+        # TODO: It looks like the OutputData ResultDescription probably belongs
+        #  in the public interface.
+        return self._data._description.width
+
     def update_output(self):
         pass
 
@@ -831,6 +841,9 @@ class ProxyResourceManager(SourceResource):
         self._result = None
         assert callable(function)
         self.function = function
+
+    def width(self) -> int:
+        return self._width
 
     def reset(self):
         self._done = False
@@ -1501,6 +1514,9 @@ class ResourceManager(SourceResource):
 
         self._done = [False] * self.ensemble_width
         self.__operation_entrance_counter = 0
+
+    def width(self) -> int:
+        return self.ensemble_width
 
     def reset(self):
         self.__operation_entrance_counter = 0
