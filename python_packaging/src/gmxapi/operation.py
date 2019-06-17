@@ -194,6 +194,10 @@ class DataSourceCollection(collections.OrderedDict):
         for name, value in kwargs.items():
             if not isinstance(name, str):
                 raise exceptions.TypeError('Data must be named with str type.')
+            # TODO: Encapsulate handling of proferred data sources to Context details.
+            # Preprocessed input should be self-describing gmxapi data types. Structured
+            # input must be recursively (depth-first) converted to gmxapi data types.
+            # TODO: Handle gmxapi Futures stored as dictionary elements!
             if not isinstance(value, valid_source_types):
                 if isinstance(value, collections.abc.Iterable):
                     # Note: Here we assume that iterables are arrays first and ensemble data if necessary.
@@ -467,6 +471,8 @@ class ProxyDataDescriptor(object):
 
     def __init__(self, name: str, dtype: ResultTypeVar = None):
         self._name = name
+        # TODO: We should not allow dtype==None, but we currently have a weak data
+        #  model that does not allow good support of structured Futures.
         if dtype is not None:
             assert isinstance(dtype, type)
             assert issubclass(dtype, valid_result_types)
@@ -521,8 +527,17 @@ class DataProxyBase(object, metaclass=DataProxyMeta):
     initialize the super class (DataProxy) with an instance of the object
     to be proxied.
 
-    Acts as an owning handle to ``instance``, preventing the reference count
-    of ``instance`` from going to zero for the lifetime of the proxy object.
+    A class deriving from DataProxyBase allows its instances to provide a namespace
+    for proxies to named data by defining attributes that are data descriptors
+    (subclasses of ProxyDataDescriptor).
+    The ProxyDataDescriptors are accessed as attributes of the
+    data proxy instance or by iterating on items(). Attributes that are not
+    ProxyDataDescriptors are possible, but will not be returned by items() which
+    is a necessary part of gmxapi execution protocol.
+
+    Acts as an owning handle to the resources provide by ``instance``,
+    preventing the reference count of ``instance`` from going to zero for the
+    lifetime of the proxy object.
 
     When sub-classing DataProxyBase, data descriptors can be passed as a mapping
     to the ``descriptors`` key word argument in the class declaration. This
@@ -550,8 +565,10 @@ class DataProxyBase(object, metaclass=DataProxyMeta):
 
         If client_id is not provided, the proxy scope is for all clients.
         """
-        # Developer note subclasses should handle self._client_identifier == None
+        # TODO: Decide whether _resource_instance is public or not.
+        # Note: currently commonly needed for subclass implementations.
         self._resource_instance = instance
+        # Developer note subclasses should handle self._client_identifier == None
         self._client_identifier = client_id
 
     @property
@@ -591,10 +608,13 @@ class Publisher(ProxyDataDescriptor):
 
     def __get__(self, instance: DataProxyBase, owner):
         if instance is None:
-            # Access through class attribute of owner class
+            # The current access has come through the class attribute of owner class
             return self
         resource_manager = instance._resource_instance
         client_id = instance._client_identifier
+        # TODO: Fix API scope.
+        # Either this class is a detail of the same implementation as ResourceManager,
+        # or we need to enforce that instance._resource_instance provides _data (or equivalent)
         if client_id is None:
             return getattr(resource_manager._data, self._name)
         else:
@@ -627,21 +647,20 @@ def define_publishing_data_proxy(output_description) -> typing.Type[DataProxyBas
 
 
 class SourceResource(abc.ABC):
-    """Resource Manager for a data provider."""
+    """Resource Manager for a data provider.
 
-    # @classmethod
-    # def __subclasshook__(cls, C):
-    #     """Check if a class looks like a ResourceManager for a data source."""
-    #     if cls is SourceResource:
-    #         if any('update_output' in B.__dict__ for B in C.__mro__) \
-    #                 and hasattr(C, '_data'):
-    #             return True
-    #     return NotImplemented
+    Supports Future instances in a particular context.
+    """
+
+    # Note: ResourceManager members not yet included:
+    # future(), _data, set_result.
 
     # This might not belong here. Maybe separate out for a OperationHandleManager?
     @abc.abstractmethod
     def data(self) -> DataProxyBase:
         """Get the output data proxy."""
+        # Warning: this should probably be renamed, but "output_data_proxy" is already
+        # a member in at least one derived class.
         ...
 
     @abc.abstractmethod
@@ -817,10 +836,18 @@ class AbstractOperationHandle(abc.ABC):
     @property
     @abc.abstractmethod
     def output(self) -> DataProxyBase:
-        """Get a proxy collection to the output of the operation."""
+        """Get a proxy collection to the output of the operation.
+
+        Developer note: The 'output' property exists to isolate the namespace of
+        output data from other operation handle attributes and we should consider
+        whether it is actually necessary or helpful. To facilitate its possible
+        future removal, do not enrich its interface beyond that of a collection
+        of OutputDescriptor attributes.
+        """
         ...
 
     # TODO: Factory for translating an operation from one context to another.
+    # Interact with OperationDetails.operation_director
     # E.g.
     #
     #     @classmethod
@@ -833,7 +860,29 @@ class AbstractOperationHandle(abc.ABC):
 class OperationDetailsBase(abc.ABC):
     """Abstract base class for Operation details in this module's Python Context.
 
-    Provides necessary interface for gmxapi.operation.ResourceManager
+    Provides necessary interface for use with gmxapi.operation.ResourceManager.
+    Separates the details of an Operation from those of the ResourceManager in
+    a given Context.
+
+    OperationDetails classes are almost stateless, serving mainly to compose implementation
+    details. Instances (operation objects) provide the Context-dependent interfaces
+    for a specific node in a work graph.
+
+    OperationDetails subclasses are created dynamically by function_wrapper and
+    make_operation.
+
+    Developer note: when subclassing, note that the ResourceManager is responsible
+    for managing Operation state. Do not add instance data members related to
+    computation or output state.
+
+    TODO: determine what is acceptable instance data and/or initialization information.
+    Note that currently the subclass in function_wrapper has _no_ initialization input,
+    but does not yet handle input-dependent output specification or node fingerprinting.
+    It seems likely that instance initialization will require some characterization of
+    supplied input, but nothing else. Even that much is not necessary if the instance
+    is completely stateless, but that would require additional parameters to the member
+    functions. However, an instance should be tied to a specific ResourceManager and
+    Context, so weak references to these would be reasonable.
     """
     # get a symbol we can use to annotate input and output types more specifically.
     Resources = typing.TypeVar('Resources')
@@ -841,18 +890,27 @@ class OperationDetailsBase(abc.ABC):
     @classmethod
     @abc.abstractmethod
     def signature(cls) -> InputCollectionDescription:
+        """Mapping of named inputs and input type.
+
+        Used to determine valid inputs before an Operation node is created.
+        """
         ...
 
     @abc.abstractmethod
     def output_description(self) -> OutputCollectionDescription:
+        """Mapping of available outputs and types for an existing Operation node."""
         ...
 
     @abc.abstractmethod
     def publishing_data_proxy(self, *, instance, client_id) -> DataProxyBase:
+        """Factory for Operation output publishing resources.
+
+        Used internally when the operation is run with resources provided by instance."""
         ...
 
     @abc.abstractmethod
     def output_data_proxy(self, instance) -> DataProxyBase:
+        """Get an object that can provide Futures for output data managed by instance."""
         ...
 
     @abc.abstractmethod
@@ -870,6 +928,9 @@ class OperationDetailsBase(abc.ABC):
         """Execute the operation with provided resources.
 
         Resources are prepared in an execution context with aid of resource_director()
+
+        After the first call, output data has been published and is trivially
+        available through the output_data_proxy()
         """
         ...
 
@@ -878,8 +939,26 @@ class OperationDetailsBase(abc.ABC):
     def make_uid(cls, input: 'DataEdge') -> str:
         """The unique identity of an operation node tags the output with respect to the input.
 
+        Combines information on the Operation details and the input to uniquely
+        identify the Operation node.
+
+        Arguments:
+            input : A (collection of) data source(s) that can provide Fingerprints.
+
+        Used internally by the Context to manage ownership of data sources, to
+        locate resources for nodes in work graphs, and to manage serialization,
+        deserialization, and checkpointing of the work graph.
+
+        The UID is a detail of the generic Operation that _should_ be independent
+        of the Context details to allow the framework to manage when and where
+        an operation is executed.
+
         TODO: We probably don't want to allow Operations to single-handedly determine their
          own uniqueness, but they probably should participate in the determination with the Context.
+
+        TODO: Context implementations should be allowed to optimize handling of
+         equivalent operations in different sessions or work graphs, but we do not
+         yet guarantee that UIDs are globally unique!
 
         To be refined...
         """
@@ -896,6 +975,7 @@ class OperationDetailsBase(abc.ABC):
 
         For the Python Context, the protocol is for the Context to call the
         resource_director instance method, passing input and output containers.
+        (See, for example, gmxapi.operation.PyFunctionRunnerResources)
         """
         ...
 
@@ -907,6 +987,23 @@ class OperationDetailsBase(abc.ABC):
         input with the requirements of the Operation and Context node builder.
         The Director (using a less flexible / more standard interface)
         builds the operation node using a node builder provided by the Context.
+
+        This is essentially the creation method, instead of __init__, but the
+        object is created and owned by the framework, and the caller receives
+        an OperationHandle instead of a reference to an instance of cls.
+
+        # TODO: We need a way to compose this functionality for arbitrary Contexts.
+        # That likely requires traits on the Contexts, and registration of Context
+        # implementations. It seems likely that an Operation will register Director
+        # implementations on import, and dispatching will be moved to the Context
+        # implementations, which can either find an appropriate OperationDirector
+        # or raise a compatibility error. To avoid requirements on import order of
+        # Operations and Context implementations, we can change this to a non-abstract
+        # dispatching method, requiring registration in the global gmxapi.context
+        # module, or get rid of this method and use something like pkg_resources
+        # "entry point" groups for independent registration of Directors and Contexts,
+        # each annotated with relevant traits. E.g.:
+        # https://setuptools.readthedocs.io/en/latest/setuptools.html#dynamic-discovery-of-services-and-plugins
         """
         if not isinstance(context, Context):
             raise exceptions.UsageError('Context instance needed for dispatch.')
@@ -926,6 +1023,8 @@ class OperationDetailsBase(abc.ABC):
 # Step 1: implement subject interface get_state()
 # Step 2: implement observer interface update()
 # Step 3: implement subject interface notify()
+# Step 4: implement observer hook to support substantial change in source that
+#         invalidates downstream fingerprinting, such as a new subgraph iteration.
 # class Observer(object):
 #     """Abstract base class for data observers."""
 #     def rebind(self, edge: DataEdge):
@@ -936,8 +1035,14 @@ class Future(object):
     """gmxapi data handle.
 
     Future is currently more than a Future right now. (should be corrected / clarified.)
-    Future is also a facade to other features of the data provider. The ``subscribe``
-    method allows consumers to bind as Observers.
+    Future is also a facade to other features of the data provider.
+
+    Future objects are the most atomic interface between Contexts. User scripts
+    may hold Futures from which they extract data with result(). Operation output
+    used as input for another Operation can be decomposed such that the Operation
+    factory has only Future objects in its input.
+
+    TODO: ``subscribe`` method allows consumers to bind as Observers.
 
     TODO: extract the abstract class for input inspection?
     Currently abstraction is handled through SourceResource subclassing.
@@ -1423,8 +1528,8 @@ class ResourceManager(SourceResource):
                 # Note! This is a detail of the ResourceManager in a SerialContext
                 for i in range(self.ensemble_width):
                     with self.local_input(i) as input:
-                        # Note: Resources are marked "done" by the resource manager
-                        # when the following context manager completes.
+                        # Note: Resources are marked "done" by the publishing system
+                        # before the following context manager finishes exiting.
                         with self.publishing_resources()(ensemble_member=i) as output:
                             # self._runner(*input.args, output=output, **input.kwargs)
                             ####
@@ -1869,6 +1974,9 @@ class OperationDirector(object):
     def __call__(self):
         cls = self.operation_details
         builder = self.context.node_builder(label=self.label)
+        # TODO: Figure out what interface really needs to be passed and enforce it.
+        # Currently this class uses OperationDetailsBase.signature and .resource_director.
+        # Ref Node_builder subclasses for additional required interface.
         builder.add_operation_details(cls)
 
         data_source_collection = cls.signature().bind(*self.args, **self.kwargs)
@@ -2046,10 +2154,12 @@ def function_wrapper(output: dict = None):
 
             return handle
 
-        # to do: The factory itself needs to be able to register a factory with the context that will be responsible for
-        # the Operation handle.
-        # The factories need to be able to serve as dispatchers for themselves, since an operation in one context may
-        # need to be reconstituted in a different context. The dispatching factory produces a director for a Context,
+        # to do: The factory itself needs to be able to register a factory with
+        # the context that will be responsible for the Operation handle.
+        # The factories need to be able to serve as dispatchers for themselves,
+        # since an operation in one context may need to be reconstituted in a
+        # different context.
+        # The dispatching factory produces a director for a Context,
         # which will register a factory with the operation in that context.
 
         # The factory function has a DirectorFactory. Director instances talk to a NodeBuilder for a Context to
