@@ -88,11 +88,12 @@ RUN . $HOME/testing/bin/activate && \
 COPY docker/entrypoint.sh /
 
 ENTRYPOINT ["/entrypoint.sh"]
-CMD ["run_pytest"]
+CMD ["run_full"]
 
 
 # MPI tests can be run in this container without requiring MPI on the host.
-#     docker run --rm -t gmxapi/ci:${REF} /home/testing/scripts/run_pytest_mpi.sh
+# (We suggest running your docker engine with multiple CPU cores allocated.)
+#     docker run --rm -t gmxapi/ci:${REF} /home/testing/scripts/run_full_mpi.sh
 # We should also try tests with an MPI-connected set of docker containers.
 
 # To be able to step through with gdb, run with something like the following, replacing

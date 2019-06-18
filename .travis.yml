@@ -58,9 +58,10 @@ jobs:
         - docker pull gmxapi/gromacs-$MATRIX
         - docker build -t ci-$MATRIX --build-arg REF=$FORKPOINT -f python_packaging/docker/ci.dockerfile python_packaging
       script:
-        - docker run --rm ci-$MATRIX run_pytest
-        - docker run --rm ci-$MATRIX integrationtest
-        - docker run --rm ci-$MATRIX integrationtest_mpi
+        - docker run --rm ci-$MATRIX run_gmxapi_unittest
+        - docker run --rm ci-$MATRIX run_acceptance_test
+        - docker run --rm ci-$MATRIX run_sample_test
+        - docker run --rm ci-$MATRIX run_full_mpi
       after_success:
         - |
           if [ "$TRAVIS_PULL_REQUEST" = "false" ]; then
