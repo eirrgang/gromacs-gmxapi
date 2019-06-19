@@ -83,6 +83,17 @@ easy access to a Jupyter notebook server running in the docker container's
 
     docker run --rm -ti -p 8888:8888 gmxapi/notebook
 
+### docs.dockerfile
+
+For very quick and isolated documentation builds on top of the gmxapi/ci-mpich 
+image, build the image from docs .dockerfile.
+The resulting image is a small web server image (without GROMACS or gmxapi installed) 
+with html content built in and copied from a temporary container.
+
+    docker run --rm -ti -p 8080:80 gmxapi/docs
+
+Then browse to http://localhost:8080/
+
 ## Automation
 
 *TODO: Update this section as Jenkins infrastructure evolves.*
