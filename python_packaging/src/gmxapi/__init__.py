@@ -37,10 +37,13 @@
 __all__ = ['commandline_operation',
            'concatenate_lists',
            'function_wrapper',
+           'gather',
            'join_arrays',
            'logger',
+           'logical_not',
            'make_constant',
            'ndarray',
+           'scatter',
            '__version__']
 
 from ._logging import logger
@@ -52,5 +55,5 @@ from .operation import computed_result, function_wrapper
 from .datamodel import NDArray
 # Import the public operations
 from .datamodel import ndarray
-from .operation import concatenate_lists, join_arrays, make_constant
+from .operation import concatenate_lists, gather, join_arrays, logical_not, make_constant, scatter
 from .commandline import commandline_operation

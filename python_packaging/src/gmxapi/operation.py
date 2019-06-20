@@ -2022,3 +2022,124 @@ def make_constant(value: Scalar):
     description = ResultDescription(dtype=dtype, width=1)
     future = Future(source, 'data', description=description)
     return future
+
+
+def scatter(array: datamodel.NDArray) -> EnsembleDataSource:
+    """Convert array data to parallel data.
+
+    Given data with shape (M,N), produce M parallel data sources of shape (N,).
+
+    The intention is to produce ensemble data flows from NDArray sources.
+    Currently, we only support zero and one dimensional data edge cross-sections.
+    In the future, it may be clearer if `scatter()` always converts a non-ensemble
+    dimension to an ensemble dimension or creates an error, but right now there
+    are cases where it is best just to raise a warning.
+
+    If provided data is a string, mapping, or scalar, there is no dimension to
+    scatter from, and DataShapeError is raised.
+    """
+    if isinstance(array, Future):
+        # scatter if possible
+        width = array.description.width
+        if width > 1:
+            return EnsembleDataSource(source=array, width=width)
+            # Recipient will need to call `result()`.
+        else:
+            raise exceptions.ValueError('No dimension to scatter from.')
+    if isinstance(array, EnsembleDataSource):
+        # scatter if possible
+        if array.width > 1:
+            raise exceptions.DataShapeError('Cannot scatter. Only 1-D ensemble data is supported.')
+        array = array.source
+        if isinstance(array, Future):
+            return scatter(array)
+        elif isinstance(array, datamodel.NDArray):
+            # Get the first meaningful scattering dimension
+            width = 0
+            source = array[:]
+            for scatter_dimension, width in enumerate(array.shape):
+                if width > 1:
+                    break
+                else:
+                    # Strip unused outer dimensions.
+                    source = source[0]
+            if width > 1:
+                return EnsembleDataSource(source=source, width=width)
+            else:
+                raise exceptions.ValueError('No dimension to scatter from.')
+    if isinstance(array, (str, bytes)):
+        raise exceptions.DataShapeError(
+            'Strings are not treated as sequences of characters to automatically scatter from.')
+    if isinstance(array, collections.abc.Iterable):
+        # scatter
+        array = datamodel.ndarray(array)
+        return scatter(array)
+
+
+def gather(data: EnsembleDataSource):
+    """Combines parallel data to an NDArray source.
+
+    If the data source has an ensemble shape of (1,), result is an NDArray of
+    length 1 if for a scalar data source. For a NDArray data source, the
+    dimensionality of the NDArray is not increased, the original NDArray is
+    produced, and gather() is a no-op.
+
+    This may change in future versions so that gather always converts an
+    ensemble dimension to an array dimension.
+    """
+    # TODO: Could be used as part of the clean up for join_arrays to convert a scalar Future to a 1-D list.
+    # Note: Clearly, the implementation of gather() is an implementation detail of the execution Context.
+    if hasattr(data, 'width'):
+        if data.width == 1:
+            # TODO: Do we want to allow this silent no-op?
+            if isinstance(data.source, datamodel.NDArray):
+                return data.source
+            elif isinstance(data.source, Future):
+                raise exceptions.ApiError('gather() not implemented for Future')
+            else:
+                raise exceptions.UsageError('Nothing to gather.')
+
+        assert data.width > 1
+        if isinstance(data.source, Future):
+            manager = ProxyResourceManager(proxied_future=data.source, width=1, function=datamodel.ndarray)
+        else:
+            if isinstance(data.source, datamodel.NDArray):
+                raise exceptions.ValueError('higher-dimensional NDArrays not yet implemented.')
+            manager = StaticSourceManager(proxied_data=data.source, width=1, function=datamodel.ndarray)
+        description = ResultDescription(dtype=datamodel.NDArray, width=1)
+        future = Future(resource_manager=manager, name=data.source.name, description=description)
+        return future
+    else:
+        raise exceptions.TypeError('Expected data with "width".')
+
+
+def logical_not(value: bool):
+    """Boolean negation.
+
+    If the argument is a gmxapi compatible Data or Future object, a new View or
+    Future is created that proxies the boolean opposite of the input.
+
+    If the argument is a callable, logical_not returns a wrapper function that
+    returns a Future for the logical opposite of the callable's result.
+    """
+    # TODO: Small data transformations like this don't need to be formal Operations.
+    # This could be essentially a data annotation that affects the resolver in a
+    # DataEdge. As an API detail, coding for different Contexts and optimizations
+    # within those Context implementations could be simplified.
+    operation = function_wrapper(output={'data': bool})(lambda data=bool(): not bool(data))
+    return operation(data=value).output.data
+
+
+def File(suffix=''):
+    """Placeholder for input/output files.
+
+    Arguments:
+        suffix: string to be appended to actual file name.
+
+    Note:
+        Some programs have logic influenced by aspects of the text in a file
+        argument. The ``suffix`` key word parameter allows the proxied file's
+        actual name to be constrained when passed as an argument to a program
+        expecting a particular suffix.
+    """
+    assert not gmx.version.has_feature('fr21')

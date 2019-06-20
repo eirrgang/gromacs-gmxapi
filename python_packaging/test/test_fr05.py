@@ -50,7 +50,10 @@ def test_fr5():
     edges) with respect to scatter, gather, map, reduce, and broadcast.
     """
     output_files = gmx.gather(rmsf.output.file['-o'])
-    gmx.run()
+    # This gmx.run syntax comes from a later FR...
+    #gmx.run()
 
     print('Output file list:')
     print(', '.join(output_files.result()))
+
+    # Also test gmx.scatter...
