@@ -839,6 +839,159 @@ class ProxyResourceManager(object):
         raise exceptions.ApiError('ProxyResourceManager cannot yet manage a full OutputDataProxy.')
 
 
+class OperationDetailsBase(abc.ABC):
+    """Abstract base class for Operation details in this module's Python Context.
+
+    Provides necessary interface for use with gmxapi.operation.ResourceManager.
+    Separates the details of an Operation from those of the ResourceManager in
+    a given Context.
+
+    OperationDetails classes are almost stateless, serving mainly to compose implementation
+    details. Instances (operation objects) provide the Context-dependent interfaces
+    for a specific node in a work graph.
+
+    OperationDetails subclasses are created dynamically by function_wrapper and
+    make_operation.
+
+    Developer note: when subclassing, note that the ResourceManager is responsible
+    for managing Operation state. Do not add instance data members related to
+    computation or output state.
+
+    TODO: determine what is acceptable instance data and/or initialization information.
+    Note that currently the subclass in function_wrapper has _no_ initialization input,
+    but does not yet handle input-dependent output specification or node fingerprinting.
+    It seems likely that instance initialization will require some characterization of
+    supplied input, but nothing else. Even that much is not necessary if the instance
+    is completely stateless, but that would require additional parameters to the member
+    functions. However, an instance should be tied to a specific ResourceManager and
+    Context, so weak references to these would be reasonable.
+    """
+    # get a symbol we can use to annotate input and output types more specifically.
+    Resources = typing.TypeVar('Resources')
+    DataProxyType = typing.TypeVar('DataProxyType', bound=DataProxyBase)
+
+    @classmethod
+    @abc.abstractmethod
+    def signature(cls) -> InputCollectionDescription:
+        """Mapping of named inputs and input type.
+
+        Used to determine valid inputs before an Operation node is created.
+        """
+        ...
+
+    @abc.abstractmethod
+    def output_description(self) -> OutputCollectionDescription:
+        """Mapping of available outputs and types for an existing Operation node."""
+        ...
+
+    @abc.abstractmethod
+    def publishing_data_proxy(self, *, instance, client_id) -> DataProxyType:
+        """Factory for Operation output publishing resources.
+
+        Used internally when the operation is run with resources provided by instance."""
+        ...
+
+    @abc.abstractmethod
+    def output_data_proxy(self, instance) -> DataProxyType:
+        """Get an object that can provide Futures for output data managed by instance."""
+        ...
+
+    @abc.abstractmethod
+    def make_datastore(self, ensemble_width: int) -> typing.Mapping[str, OutputData]:
+        """Create a container to hold the resources for this operation node.
+
+        Used internally by the resource manager when setting up the node.
+        Evolution of the C++ framework for creating the Operation SessionResources
+        object will inform the future of this and the resource_director method.
+        """
+        ...
+
+    @abc.abstractmethod
+    def __call__(self, resources: Resources):
+        """Execute the operation with provided resources.
+
+        Resources are prepared in an execution context with aid of resource_director()
+
+        After the first call, output data has been published and is trivially
+        available through the output_data_proxy()
+        """
+        ...
+
+    @classmethod
+    @abc.abstractmethod
+    def make_uid(cls, input: 'DataEdge') -> str:
+        """The unique identity of an operation node tags the output with respect to the input.
+
+        Combines information on the Operation details and the input to uniquely
+        identify the Operation node.
+
+        Arguments:
+            input : A (collection of) data source(s) that can provide Fingerprints.
+
+        Used internally by the Context to manage ownership of data sources, to
+        locate resources for nodes in work graphs, and to manage serialization,
+        deserialization, and checkpointing of the work graph.
+
+        The UID is a detail of the generic Operation that _should_ be independent
+        of the Context details to allow the framework to manage when and where
+        an operation is executed.
+
+        TODO: We probably don't want to allow Operations to single-handedly determine their
+         own uniqueness, but they probably should participate in the determination with the Context.
+
+        TODO: Context implementations should be allowed to optimize handling of
+         equivalent operations in different sessions or work graphs, but we do not
+         yet guarantee that UIDs are globally unique!
+
+        To be refined...
+        """
+        ...
+
+    @classmethod
+    @abc.abstractmethod
+    def resource_director(cls, *, input, output) -> Resources:
+        """a Director factory that helps build the Session Resources for the function.
+
+        The Session launcher provides the director with all of the resources previously
+        requested/negotiated/registered by the Operation. The director uses details of
+        the operation to build the resources object required by the operation runner.
+
+        For the Python Context, the protocol is for the Context to call the
+        resource_director instance method, passing input and output containers.
+        (See, for example, gmxapi.operation.PyFunctionRunnerResources)
+        """
+        ...
+
+    @classmethod
+    def operation_director(cls, *args, context, label=None, **kwargs):
+        """Dispatching Director for adding a work node.
+
+        A Director for input of a particular sort knows how to reconcile
+        input with the requirements of the Operation and Context node builder.
+        The Director (using a less flexible / more standard interface)
+        builds the operation node using a node builder provided by the Context.
+
+        This is essentially the creation method, instead of __init__, but the
+        object is created and owned by the framework, and the caller receives
+        an OperationHandle instead of a reference to an instance of cls.
+
+        # TODO: We need a way to compose this functionality for arbitrary Contexts.
+        # That likely requires traits on the Contexts, and registration of Context
+        # implementations. It seems likely that an Operation will register Director
+        # implementations on import, and dispatching will be moved to the Context
+        # implementations, which can either find an appropriate OperationDirector
+        # or raise a compatibility error. To avoid requirements on import order of
+        # Operations and Context implementations, we can change this to a non-abstract
+        # dispatching method, requiring registration in the global gmxapi.context
+        # module, or get rid of this method and use something like pkg_resources
+        # "entry point" groups for independent registration of Directors and Contexts,
+        # each annotated with relevant traits. E.g.:
+        # https://setuptools.readthedocs.io/en/latest/setuptools.html#dynamic-discovery-of-services-and-plugins
+        """
+        construct = OperationDirector(*args, operation_details=cls, context=context, label=label, **kwargs)
+        return construct()
+
+
 # TODO: Implement observer pattern for edge->node data flow.
 # Step 0: implement subject interface subscribe()
 # Step 1: implement subject interface get_state()
@@ -1253,7 +1406,7 @@ class ResourceManager(object):
         finally:
             self._done[ensemble_member] = True
 
-    def __init__(self, *, source: DataEdge, operation):
+    def __init__(self, *, source: DataEdge, operation: OperationDetailsBase):
         """Initialize a resource manager for the inputs and outputs of an operation.
 
         Arguments:
@@ -1626,7 +1779,7 @@ class OperationDirector(object):
 
     def __init__(self,
                  *args,
-                 operation_details,
+                 operation_details: typing.Type[OperationDetailsBase],
                  context,
                  label=None,
                  **kwargs):
@@ -1641,6 +1794,7 @@ class OperationDirector(object):
         if self.operation_details is None:
             raise exceptions.UsageError('Missing details needed for operation node.')
 
+        assert issubclass(self.operation_details, OperationDetailsBase)
         data_source_collection = self.operation_details.signature().bind(*self.args, **self.kwargs)
         input_sink = SinkTerminal(self.operation_details.signature())
         input_sink.update(data_source_collection)
@@ -1699,7 +1853,7 @@ def function_wrapper(output: dict = None):
         # operation, such as the resource director, builder, etc.
         # Note that a ResourceManager holds a reference to an instance of OperationDetails,
         # though input signature needs to be well-defined at the type level.
-        class OperationDetails(object):
+        class OperationDetails(OperationDetailsBase):
             # Warning: function.__qualname__ is not rigorous since function may be in a local scope.
             # TODO: Improve base identifier.
             # Suggest registering directly in the Context instead of in this local class definition.
@@ -1719,12 +1873,6 @@ def function_wrapper(output: dict = None):
 
             # TODO: This is a Context detail.
             def make_datastore(self, ensemble_width: int):
-                """Create a container to hold the resources for this operation node.
-
-                Used internally by the resource manager when setting up the node.
-                Evolution of the C++ framework for creating the Operation SessionResources
-                object will inform the future of this and the resource_director method.
-                """
                 datastore = {}
                 for name, dtype in self.output_description().items():
                     assert isinstance(dtype, type)
@@ -1734,36 +1882,20 @@ def function_wrapper(output: dict = None):
 
             @classmethod
             def signature(cls) -> InputCollectionDescription:
-                """Mapping of named inputs and input type.
-
-                Used to determine valid inputs before an Operation node is created.
-                """
                 return cls._input_signature_description
 
             def output_description(self) -> OutputCollectionDescription:
-                """Mapping of available outputs and types for an existing Operation node."""
                 return self._output_description
 
             def publishing_data_proxy(self, *, instance, client_id: int):
-                """Factory for Operation output publishing resources.
-
-                Used internally when the operation is run with resources provided by instance."""
                 assert isinstance(instance, ResourceManager)
                 return self._publishing_data_proxy_type(instance=instance, client_id=client_id)
 
             def output_data_proxy(self, instance):
-                """Get an object that can provide Futures for output data managed by instance."""
                 assert isinstance(instance, ResourceManager)
                 return self._output_data_proxy_type(instance=instance)
 
             def __call__(self, resources: PyFunctionRunnerResources):
-                """Execute the operation with provided resources.
-
-                Resources are prepared in an execution context with aid of resource_director()
-
-                After the first call, output data has been published and is trivially
-                available through the output_data_proxy()
-                """
                 self._runner(resources)
 
             @classmethod
@@ -1794,35 +1926,6 @@ def function_wrapper(output: dict = None):
                         if got != expected:
                             raise exceptions.TypeError('Expected {} but got {}.'.format(expected, got))
                 return resources
-
-            @classmethod
-            def operation_director(cls, *args, context, label=None, **kwargs):
-                """Dispatching Director for adding a work node.
-
-                A Director for input of a particular sort knows how to reconcile
-                input with the requirements of the Operation and Context node builder.
-                The Director (using a less flexible / more standard interface)
-                builds the operation node using a node builder provided by the Context.
-
-                This is essentially the creation method, instead of __init__, but the
-                object is created and owned by the framework, and the caller receives
-                an OperationHandle instead of a reference to an instance of cls.
-
-                # TODO: We need a way to compose this functionality for arbitrary Contexts.
-                # That likely requires traits on the Contexts, and registration of Context
-                # implementations. It seems likely that an Operation will register Director
-                # implementations on import, and dispatching will be moved to the Context
-                # implementations, which can either find an appropriate OperationDirector
-                # or raise a compatibility error. To avoid requirements on import order of
-                # Operations and Context implementations, we can change this to a non-abstract
-                # dispatching method, requiring registration in the global gmxapi.context
-                # module, or get rid of this method and use something like pkg_resources
-                # "entry point" groups for independent registration of Directors and Contexts,
-                # each annotated with relevant traits. E.g.:
-                # https://setuptools.readthedocs.io/en/latest/setuptools.html#dynamic-discovery-of-services-and-plugins
-                """
-                construct = OperationDirector(*args, operation_details=cls, context=context, label=label, **kwargs)
-                return construct()
 
         # TODO: (FR4) Update annotations with gmxapi data types. E.g. return -> Future.
         @functools.wraps(function)
