@@ -3650,3 +3650,63 @@ def logical_not(value: bool) -> Future:
     # within those Context implementations could be simplified.
     operation = function_wrapper(output={'data': bool})(lambda data=bool(): not bool(data))
     return operation(data=value).output.data
+
+
+class File(object):
+    """Placeholder for output files.
+
+    Used to describe output of an Operation. Some Operations accept parameters
+    that determine what output to produce. An instance of File can be used to
+    indicate that the Context should allow the Operation to produce a file at
+    run time. The name and path of the file are managed by the Context.
+
+    Generally, an Operation will have an output for each File in its parameters.
+    Refer to the documentation for the Operation to find out how to get a
+    Future for the output file.
+
+    Note:
+        File references are for single files. If an ensemble of files is needed,
+        use a list of Files.
+
+    Note:
+        Some programs have logic influenced by aspects of the text in a file
+        argument. The ``suffix`` key word parameter allows the proxied file's
+        actual name to be constrained when passed as an argument to a program
+        expecting a particular suffix.
+    """
+    def __init__(self, suffix: typing.Optional[str] = ''):
+        """Annotate a parameter representing a file that does not yet exist.
+
+        Arguments:
+            suffix: string to be appended to actual file name.
+        """
+        # This feature may not be fully implemented.
+        assert gmx.version.has_feature('fr21')
+        self.suffix = suffix
+
+
+class FileFuture(Future[str]):
+    """A reference to a file that may not yet exist.
+
+    Operations that produce output files make those output files available to
+    client code as Futures. This class is used by gmxapi.operation.Context to
+    implement such Futures.
+
+    FileFuture objects can be used in the same situations in which File objects
+    can be used.
+
+    The result obtained from FileFuture.result() (with no arguments) is a
+    locally valid file path, as created by tempfile.mkstemp(). To request that
+    the generated file be made available with a specific name or in a particular
+    filesystem, you can provide a full path with the *filename* argument to
+    result().
+
+    The Context guarantees that the path is not returned until the operation
+    producing the file has completed.
+    """
+
+    def result(self, filename: typing.Optional[str] = None) -> str:
+        if filename is None:
+            return super().result()
+        else:
+            raise exceptions.NotImplementedError('To do!')

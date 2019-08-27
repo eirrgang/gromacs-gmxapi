@@ -39,12 +39,13 @@ __all__ = ['commandline_operation']
 
 import shutil
 import subprocess
+from typing import Mapping, Union
 
 import gmxapi as gmx
 from gmxapi import exceptions
 from gmxapi import logger as root_logger
 from gmxapi.datamodel import NDArray
-from gmxapi.operation import OutputCollectionDescription
+from gmxapi.operation import OutputCollectionDescription, File
 
 # Module-level logger
 logger = root_logger.getChild('commandline')
@@ -212,8 +213,8 @@ def filemap_to_flag_list(filemap: dict = None):
 #  from the helper (decorated function).
 def commandline_operation(executable=None,
                           arguments=(),
-                          input_files: dict = None,
-                          output_files: dict = None,
+                          input_files: Mapping[str, Union[str, Future[str]]] = None,
+                          output_files: Mapping[str, Union[str, File]] = None,
                           **kwargs):
     """Helper function to define a new operation that executes a subprocess in gmxapi data flow.
 
